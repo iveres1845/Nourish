@@ -223,7 +223,7 @@ export default function DashboardPage() {
   const isOnTrack     = totalEnergy >= energyLow
   const deficit       = Math.max(0, energyLow - Math.round(totalEnergy))
 
-  const firstName = profile?.email?.split('@')[0] ?? 'there'
+  const firstName = (profile as any)?.display_name || profile?.email?.split('@')[0] || 'there'
   const today = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })
 
   return (

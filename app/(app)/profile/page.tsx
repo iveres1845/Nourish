@@ -93,6 +93,7 @@ export default function ProfilePage() {
   const [saved, setSaved]       = useState(false)
   const [error, setError]       = useState('')
   const [email, setEmail]       = useState('')
+  const [displayName, setDisplayName] = useState('')
 
   // Body metrics
   const [weight, setWeight]     = useState('')
@@ -131,6 +132,7 @@ export default function ProfilePage() {
 
       if (!prof) { router.push('/onboarding'); return }
 
+      setDisplayName(prof.display_name ?? '')
       setWeight(String(prof.weight_kg ?? ''))
       setHeight(String(prof.height_cm ?? ''))
       setSex(prof.sex ?? 'female')
@@ -207,6 +209,7 @@ export default function ProfilePage() {
     const { error: saveError } = await supabase
       .from('profiles')
       .update({
+        display_name: displayName.trim() || null,
         weight_kg: w,
         height_cm: h,
         sex,
@@ -285,6 +288,19 @@ export default function ProfilePage() {
             <p className="text-sage-300 text-[11px]">Updates as you edit below</p>
           </div>
         </div>
+
+        {/* Display name */}
+        <Section title="Your name">
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Display name</label>
+            <input
+              type="text" value={displayName} onChange={e => setDisplayName(e.target.value)}
+              placeholder="e.g. Nandor"
+              className="w-full px-3 py-3 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-400"
+            />
+            <p className="text-xs text-gray-400 mt-1.5">Shows up in your dashboard greeting</p>
+          </div>
+        </Section>
 
         {/* Body metrics */}
         <Section title="Body metrics">

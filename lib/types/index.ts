@@ -7,6 +7,7 @@ export type DietaryPattern = 'omnivore' | 'vegetarian' | 'vegan' | 'pescatarian'
 export interface UserProfile {
   id: string
   email: string
+  display_name?: string
   created_at: string
 
   // Onboarding — required for EA calculation
