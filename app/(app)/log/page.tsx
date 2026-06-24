@@ -385,7 +385,7 @@ export default function LogPage() {
           )}
         </div>
 
-        <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={handleFileChange} className="hidden" />
+        <input ref={fileRef} type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
 
         {/* Meal type */}
         <div className="card p-4">
