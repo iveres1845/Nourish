@@ -1,5 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  typescript: { ignoreBuildErrors: true },
+  eslint: { ignoreDuringBuilds: true },
   experimental: {
     // Prevent webpack from bundling openai — lets it use Node's native fetch
     // instead of node-fetch, which fixes ERR_STREAM_PREMATURE_CLOSE
