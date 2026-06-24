@@ -104,8 +104,8 @@ export default function ProfilePage() {
   const [steps, setSteps]       = useState(7000)
   const [sessions, setSessions] = useState<ExerciseSession[]>([])
   const [newActivity, setNewActivity] = useState(ACTIVITY_OPTIONS[0])
-  const [newDuration, setNewDuration] = useState(0)
-  const [newDays, setNewDays]   = useState(0)
+  const [newDuration, setNewDuration] = useState<string>('')
+  const [newDays, setNewDays] = useState<string>('')
 
   // Goals & diet
   const [goals, setGoals]       = useState<string[]>([])
@@ -173,13 +173,17 @@ export default function ProfilePage() {
   }
 
   function addSession() {
+    const dur = Math.max(5, parseInt(newDuration) || 30)
+    const days = Math.min(7, Math.max(1, parseInt(newDays) || 1))
     setSessions(prev => [...prev, {
       activity: newActivity.value,
       met: newActivity.met,
-      duration_min: newDuration,
-      days_per_week: newDays,
+      duration_min: dur,
+      days_per_week: days,
       emoji: newActivity.emoji,
     }])
+    setNewDuration('')
+    setNewDays('')
   }
 
   function removeSession(i: number) {
@@ -359,15 +363,15 @@ export default function ProfilePage() {
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-xs text-gray-400 mb-1">Duration (min)</label>
-                  <input type="number" min={5} max={240} value={newDuration}
-                    onChange={e => setNewDuration(parseInt(e.target.value) || 0)}
+                  <input type="number" min={5} max={240} value={newDuration} placeholder="30"
+                    onChange={e => setNewDuration(e.target.value)}
                     className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-400"
                   />
                 </div>
                 <div>
                   <label className="block text-xs text-gray-400 mb-1">Days / week</label>
-                  <input type="number" min={1} max={7} value={newDays}
-                    onChange={e => setNewDays(Math.min(7, Math.max(1, parseInt(e.target.value) || 0)))}
+                  <input type="number" min={1} max={7} value={newDays} placeholder="3"
+                    onChange={e => setNewDays(e.target.value)}
                     className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-400"
                   />
                 </div>
