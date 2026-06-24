@@ -330,7 +330,7 @@ export default function LogPage() {
         )}
 
         {/* Save button */}
-        <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[430px] p-4 bg-cream-50/90 backdrop-blur-sm border-t border-gray-100">
+        <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[430px] p-4 pb-[84px] bg-cream-50/90 backdrop-blur-sm border-t border-gray-100 z-40">
           <button onClick={handleSave}
             className="w-full bg-sage-600 hover:bg-sage-700 active:bg-sage-800 text-white font-semibold py-4 rounded-2xl text-sm transition-all shadow-lg shadow-sage-300/40 active:scale-[0.98]">
             Save meal · {Math.round(totalEnergy)} kcal
