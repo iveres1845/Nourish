@@ -104,8 +104,8 @@ export default function ProfilePage() {
   const [steps, setSteps]       = useState(7000)
   const [sessions, setSessions] = useState<ExerciseSession[]>([])
   const [newActivity, setNewActivity] = useState(ACTIVITY_OPTIONS[0])
-  const [newDuration, setNewDuration] = useState(45)
-  const [newDays, setNewDays]   = useState(3)
+  const [newDuration, setNewDuration] = useState(0)
+  const [newDays, setNewDays]   = useState(0)
 
   // Goals & diet
   const [goals, setGoals]       = useState<string[]>([])
@@ -360,14 +360,14 @@ export default function ProfilePage() {
                 <div>
                   <label className="block text-xs text-gray-400 mb-1">Duration (min)</label>
                   <input type="number" min={5} max={240} value={newDuration}
-                    onChange={e => setNewDuration(parseInt(e.target.value) || 30)}
+                    onChange={e => setNewDuration(parseInt(e.target.value) || 0)}
                     className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-400"
                   />
                 </div>
                 <div>
                   <label className="block text-xs text-gray-400 mb-1">Days / week</label>
                   <input type="number" min={1} max={7} value={newDays}
-                    onChange={e => setNewDays(Math.min(7, Math.max(1, parseInt(e.target.value) || 1)))}
+                    onChange={e => setNewDays(Math.min(7, Math.max(1, parseInt(e.target.value) || 0)))}
                     className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-400"
                   />
                 </div>
