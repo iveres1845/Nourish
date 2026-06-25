@@ -47,7 +47,7 @@ Return this exact JSON structure:
   "overall_confidence": 0.0–1.0,
   "foods": [
     {
-      "name": "specific food name (e.g. 'jasmine rice' not 'rice')",
+      "name": "specific food name — INCLUDE BRAND NAME if mentioned (e.g. 'Mission Carb Balance flour tortilla', 'Fairlife Core Power protein shake', 'Chobani plain Greek yogurt')",
       "portion_g_min": number,
       "portion_g_max": number,
       "prep_method": "raw|boiled|steamed|sauteed|roasted|grilled|baked|fried|unknown",
@@ -67,7 +67,15 @@ Portion estimation rules:
 - 1 tablespoon of oil/dressing = ~13–15g
 - Be realistic, not conservative — people tend to eat more than label serving sizes
 - If oil/dressing is mentioned, include it in the oil fields
-- Set confidence 0.6–0.8 for text-described meals (lower than photo analysis)`,
+- Set confidence 0.6–0.8 for text-described meals (lower than photo analysis)
+
+BRAND NAMES — critical for accuracy:
+- If the user mentions a specific brand or product, use the full brand + product name in the name field
+- Branded products often have very different nutrition profiles than generics:
+  - Mission Carb Balance tortilla: ~70 cal, 19g carbs, 13g fiber — vs regular flour tortilla: ~130 cal, 25g carbs, 1g fiber
+  - Fairlife Core Power shake: ~170 cal, 26g protein — vs generic protein shake varies wildly
+  - Quest protein bar vs generic granola bar: totally different macros
+- So always preserve brand + product name exactly as the user stated it`,
         },
         {
           role: 'user',

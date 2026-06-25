@@ -75,6 +75,11 @@ Return this exact JSON structure:
 - When you see multiple pieces (4 waffles, 3 slices), the portion_g values should reflect the TOTAL for all pieces
 - Aim for accuracy. A slight overestimate is better than a significant underestimate.
 - Include everything visible, even low-confidence items
+- **Brand names** — if the user note identifies a specific brand or product, use the full brand + product name in the food item's name field. Examples:
+  - Note says "Fairlife protein shake" → name = "Fairlife Core Power protein shake"
+  - Note says "Mission Carb Balance tortillas" → name = "Mission Carb Balance flour tortilla"
+  - Note says "Chobani Greek yogurt" → name = "Chobani plain Greek yogurt"
+  - This is critical — branded products have very different nutrition profiles than generics
 - Return only valid JSON, no explanation`
 
 /**
@@ -135,6 +140,11 @@ function buildUserPrompt(userContext?: string, mealTypeHint?: string): string {
 
   if (userContext) {
     prompt += `\n\nUser note: "${userContext}"`
+    // Check if note likely contains brand mentions
+    const brandPattern = /\b([A-Z][a-z]+ [A-Z][a-z]+|fairlife|mission|chobani|oikos|fage|siggi|rx bar|rxbar|kind bar|quest|clif|larabar|skyr|activia|yoplait|tropicana|simply|naked juice|muscle milk|premier protein|core power|garden of life|orgain|vega|sunwarrior)\b/i
+    if (brandPattern.test(userContext)) {
+      prompt += '\n\n⚠️ IMPORTANT: The user note mentions a specific brand. Use the full brand + product name in the food item name field for accurate nutrition lookup.'
+    }
   }
   if (mealTypeHint) {
     prompt += `\n\nMeal time: ${mealTypeHint}`

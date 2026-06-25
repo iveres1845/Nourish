@@ -74,24 +74,49 @@ interface FDCSearchResult {
 // ─── API calls ────────────────────────────────────────────────────────────────
 
 /**
- * Search FoodData Central for a food by name.
- * Returns top candidates, or empty array if not found.
+ * Search FoodData Central — generic whole foods (Foundation + SR Legacy).
  */
-export async function searchFood(query: string): Promise<Array<{ fdcId: number; description: string }>> {
+export async function searchFood(query: string): Promise<Array<{ fdcId: number; description: string; dataType: string }>> {
   const url = new URL(`${FDC_BASE}/foods/search`)
   url.searchParams.set('query', query)
   url.searchParams.set('pageSize', '5')
-  url.searchParams.set('dataType', 'Foundation,SR Legacy')  // prefer whole-food entries
+  url.searchParams.set('dataType', 'Foundation,SR Legacy')
   url.searchParams.set('api_key', process.env.USDA_FDC_API_KEY!)
 
   const res = await fetch(url.toString())
-  if (!res.ok) {
-    console.warn(`FDC search failed for "${query}": ${res.status}`)
-    return []
-  }
-
+  if (!res.ok) { console.warn(`FDC search failed for "${query}": ${res.status}`); return [] }
   const data = (await res.json()) as FDCSearchResult
-  return (data.foods ?? []).slice(0, 5).map(f => ({ fdcId: f.fdcId, description: f.description }))
+  return (data.foods ?? []).slice(0, 5).map(f => ({ fdcId: f.fdcId, description: f.description, dataType: f.dataType ?? 'Foundation' }))
+}
+
+/**
+ * Search FoodData Central Branded Foods database.
+ * Used when user notes or vision model identify a specific brand/product.
+ */
+export async function searchBrandedFood(query: string): Promise<Array<{ fdcId: number; description: string; dataType: string }>> {
+  const url = new URL(`${FDC_BASE}/foods/search`)
+  url.searchParams.set('query', query)
+  url.searchParams.set('pageSize', '8')
+  url.searchParams.set('dataType', 'Branded')
+  url.searchParams.set('api_key', process.env.USDA_FDC_API_KEY!)
+
+  const res = await fetch(url.toString())
+  if (!res.ok) { console.warn(`FDC branded search failed for "${query}": ${res.status}`); return [] }
+  const data = (await res.json()) as FDCSearchResult
+  return (data.foods ?? []).slice(0, 8).map(f => ({ fdcId: f.fdcId, description: f.description, dataType: 'Branded' }))
+}
+
+/**
+ * Heuristic: does this food name look like it contains a brand?
+ * Looks for capitalized multi-word names, known brand patterns.
+ */
+function looksLikeBrandedFood(name: string): boolean {
+  // Has multiple capitalised words (e.g. "Fairlife Core Power", "Mission Carb Balance")
+  const capitalWords = (name.match(/\b[A-Z][a-z]+/g) ?? []).length
+  if (capitalWords >= 2) return true
+  // Contains common brand signals
+  const brandSignals = /\b(protein shake|protein bar|tortilla wrap|greek yogurt brand|granola bar|energy drink|protein powder|sports drink|meal replacement|protein cookie)\b/i
+  return brandSignals.test(name)
 }
 
 /**
@@ -195,16 +220,36 @@ export async function lookupFoodNutrients(params: {
   nutrients_min: Record<string, number>
   nutrients_max: Record<string, number>
   nutrients_mid: Record<string, number>
+  source: 'branded' | 'generic'
 } | null> {
   const { name, portion_g_min, portion_g_max, prep_method } = params
 
+  // ── Step 1: Try branded search first if name looks brand-specific ──────────
+  if (looksLikeBrandedFood(name)) {
+    const brandedCandidates = await searchBrandedFood(name)
+    for (const candidate of brandedCandidates) {
+      const per100g = await getFoodNutrients(candidate.fdcId)
+      if (Object.keys(per100g).length < 3) continue
+      const mid = (portion_g_min + portion_g_max) / 2
+      console.log(`✓ Branded USDA match for "${name}": ${candidate.description} (${candidate.fdcId})`)
+      return {
+        fdcId: candidate.fdcId,
+        nutrients_min: applyPrepAdjustments(scaleNutrients(per100g, portion_g_min), prep_method),
+        nutrients_max: applyPrepAdjustments(scaleNutrients(per100g, portion_g_max), prep_method),
+        nutrients_mid: applyPrepAdjustments(scaleNutrients(per100g, mid), prep_method),
+        source: 'branded',
+      }
+    }
+    console.log(`No branded USDA match for "${name}" — falling back to generic`)
+  }
+
+  // ── Step 2: Generic USDA search (Foundation / SR Legacy) ──────────────────
   const candidates = await searchFood(name)
   if (candidates.length === 0) return null
 
-  // Try each candidate until we find one with actual nutrient data
   for (const candidate of candidates) {
     const per100g = await getFoodNutrients(candidate.fdcId)
-    if (Object.keys(per100g).length === 0) continue  // no nutrients — try next
+    if (Object.keys(per100g).length === 0) continue
 
     const mid = (portion_g_min + portion_g_max) / 2
     return {
@@ -212,9 +257,10 @@ export async function lookupFoodNutrients(params: {
       nutrients_min: applyPrepAdjustments(scaleNutrients(per100g, portion_g_min), prep_method),
       nutrients_max: applyPrepAdjustments(scaleNutrients(per100g, portion_g_max), prep_method),
       nutrients_mid: applyPrepAdjustments(scaleNutrients(per100g, mid), prep_method),
+      source: 'generic',
     }
   }
 
-  console.warn(`No nutrient data found for "${name}" across ${candidates.length} USDA candidates`)
+  console.warn(`No nutrient data found for "${name}" across USDA candidates`)
   return null
 }
