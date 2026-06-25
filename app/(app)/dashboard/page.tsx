@@ -2,326 +2,382 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import type { UserProfile, DailyLog, Meal } from '@/lib/types'
+import Link from 'next/link'
 
-const KEY_NUTRIENTS = [
-  { key: 'iron_mg',       label: 'Iron',      unit: 'mg',  dri: 18,   color: '#c97b5a' },
-  { key: 'calcium_mg',    label: 'Calcium',   unit: 'mg',  dri: 1000, color: '#638c57' },
-  { key: 'vitamin_d_mcg', label: 'Vitamin D', unit: 'mcg', dri: 15,   color: '#f59e0b' },
-  { key: 'magnesium_mg',  label: 'Magnesium', unit: 'mg',  dri: 310,  color: '#86a97a' },
-  { key: 'zinc_mg',       label: 'Zinc',      unit: 'mg',  dri: 8,    color: '#60a5fa' },
-  { key: 'protein_g',     label: 'Protein',   unit: 'g',   dri: 50,   color: '#a78bfa' },
-]
+// ── Types ────────────────────────────────────────────────────────────────────
+interface MealLog { id: string; meal_name: string; photo_url?: string; logged_at: string; nutrients?: any }
+interface NutrientTotals { energy_kcal: number; protein_g: number; carbs_g: number; fat_g: number; fiber_g: number }
 
-const MEAL_EMOJIS: Record<string, string> = {
-  breakfast: '🌅', lunch: '☀️', dinner: '🌙', snack: '🍎', unknown: '🍽️',
+// ── Nourishment Score helpers ─────────────────────────────────────────────────
+function calcNourishmentScore(nutrients: NutrientTotals, energyMin: number, meals: MealLog[]) {
+  const fuelPct  = energyMin > 0 ? Math.min((nutrients.energy_kcal / energyMin) * 100, 100) : 0
+  const proteinPct = Math.min((nutrients.protein_g / 85) * 100, 100)
+  const fiberPct   = Math.min((nutrients.fiber_g   / 25) * 100, 100)
+  const microPct   = (proteinPct + fiberPct) / 2
+  const varietyPct = Math.min((meals.length / 4) * 100, 100)
+  return Math.round(fuelPct * 0.4 + microPct * 0.4 + varietyPct * 0.2)
 }
 
-function getGreeting() {
-  const h = new Date().getHours()
-  if (h < 12) return 'Good morning'
-  if (h < 17) return 'Good afternoon'
-  return 'Good evening'
+function scoreLabel(score: number): { text: string; color: string } {
+  if (score >= 85) return { text: 'Thriving',       color: '#638c57' }
+  if (score >= 65) return { text: 'On Track',        color: '#7aad6c' }
+  if (score >= 45) return { text: 'Building',        color: '#d4a847' }
+  if (score >= 25) return { text: 'Needs Fuel',      color: '#c97b5a' }
+  return            { text: 'Start Fuelling',  color: '#b55a3a' }
 }
 
-// ── Energy Ring ───────────────────────────────────────────────────────────────
-
-function EnergyRing({ pct, kcal, low, high }: { pct: number; kcal: number; low: number; high: number }) {
+// ── Nourishment Ring ──────────────────────────────────────────────────────────
+function NourishmentRing({ score }: { score: number }) {
   const r = 52
   const circ = 2 * Math.PI * r
-  const dash = circ * Math.min(pct / 100, 1)
-  const isOnTrack = kcal >= low
-  const strokeColor = isOnTrack ? '#638c57' : pct > 60 ? '#f59e0b' : '#e5e7eb'
-
+  const offset = circ * (1 - score / 100)
+  const { text, color } = scoreLabel(score)
   return (
-    <div className="relative w-32 h-32 flex-shrink-0">
-      <svg className="w-full h-full -rotate-90" viewBox="0 0 120 120">
-        <circle cx="60" cy="60" r={r} fill="none" stroke="#f3f4f6" strokeWidth="9" />
-        <circle
-          cx="60" cy="60" r={r}
-          fill="none"
-          stroke={strokeColor}
-          strokeWidth="9"
-          strokeLinecap="round"
-          strokeDasharray={`${dash} ${circ}`}
-          style={{ transition: 'stroke-dasharray 1s ease-out, stroke 0.5s ease' }}
-        />
-      </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className="text-[22px] font-bold text-gray-900 leading-none">{Math.round(kcal)}</span>
-        <span className="text-[10px] text-gray-400 font-medium mt-0.5">kcal</span>
+    <svg width="140" height="140" viewBox="0 0 140 140" className="drop-shadow-sm flex-shrink-0">
+      <circle cx="70" cy="70" r={r} fill="none" stroke="#f0ede6" strokeWidth="10" />
+      <circle cx="70" cy="70" r={r} fill="none" stroke={color} strokeWidth="10"
+        strokeDasharray={circ} strokeDashoffset={offset}
+        strokeLinecap="round" transform="rotate(-90 70 70)"
+        style={{ transition: 'stroke-dashoffset 1s ease' }}
+      />
+      <text x="70" y="64" textAnchor="middle" fontSize="28" fontWeight="700" fill="#1a1a1a">{score}</text>
+      <text x="70" y="80" textAnchor="middle" fontSize="11" fontWeight="600" fill={color}>{text}</text>
+      <text x="70" y="95" textAnchor="middle" fontSize="9"  fill="#aaa">/100</text>
+    </svg>
+  )
+}
+
+// ── Mini bar chart ────────────────────────────────────────────────────────────
+function BiofeedbackMini({ label, emoji, data }: { label: string; emoji: string; data: { date: string; value: number }[] }) {
+  return (
+    <div className="flex-1 min-w-0">
+      <div className="flex items-center gap-0.5 mb-1">
+        <span className="text-sm leading-none">{emoji}</span>
       </div>
+      <div className="flex items-end gap-[2px] h-8">
+        {data.map((d, i) => (
+          <div key={i} className="flex-1"
+            style={{
+              height: d.value > 0 ? `${(d.value / 5) * 28}px` : '2px',
+              backgroundColor: d.value >= 4 ? '#638c57' : d.value >= 3 ? '#d4a847' : d.value > 0 ? '#c97b5a' : '#e5e5e5',
+              borderRadius: '2px',
+              minHeight: '2px',
+            }}
+          />
+        ))}
+      </div>
+      <p className="text-[9px] text-gray-400 mt-0.5 truncate">{label}</p>
     </div>
   )
 }
 
-// ── Nutrient Bar ──────────────────────────────────────────────────────────────
-
-function NutrientBar({ label, value, dri, unit, color }: {
-  label: string; value: number; dri: number; unit: string; color: string
-}) {
-  const pct = Math.min((value / dri) * 100, 100)
-
+// ── Score Row ─────────────────────────────────────────────────────────────────
+function ScoreRow({ label, pct }: { label: string; pct: number }) {
+  const p = Math.round(Math.min(pct, 100))
   return (
     <div>
-      <div className="flex items-center justify-between mb-1.5">
-        <span className="text-xs font-semibold text-gray-600">{label}</span>
-        <span className="text-xs font-bold" style={{ color: pct >= 80 ? color : pct >= 40 ? '#f59e0b' : '#d1d5db' }}>
-          {Math.round(pct)}%
-        </span>
+      <div className="flex justify-between mb-0.5">
+        <span className="text-xs text-gray-500">{label}</span>
+        <span className="text-xs font-semibold text-gray-700">{p}%</span>
       </div>
       <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-        <div
-          className="h-full rounded-full transition-all duration-700"
-          style={{ width: `${pct}%`, backgroundColor: pct >= 80 ? color : pct >= 40 ? '#f59e0b' : '#e5e7eb' }}
+        <div className="h-full rounded-full transition-all duration-700"
+          style={{ width: `${p}%`, backgroundColor: p >= 75 ? '#638c57' : p >= 50 ? '#d4a847' : '#c97b5a' }}
         />
       </div>
-      <p className="text-[10px] text-gray-300 mt-1">{Math.round(value)}{unit}</p>
     </div>
   )
 }
 
-// ── Meal Row ──────────────────────────────────────────────────────────────────
-
-function MealRow({ meal, onDelete }: { meal: Meal; onDelete: (meal: Meal) => void }) {
-  const time = new Date(meal.logged_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-  const energy = (meal.nutrient_totals_mid as Record<string, number>)?.energy_kcal ?? 0
-  const emoji = MEAL_EMOJIS[meal.meal_type ?? 'unknown'] ?? '🍽️'
-  const [confirming, setConfirming] = useState(false)
-
-  if (confirming) {
-    return (
-      <div className="flex items-center gap-2 py-3 border-b border-gray-50 last:border-0">
-        <p className="flex-1 text-xs text-gray-500">Remove this meal?</p>
-        <button onClick={() => onDelete(meal)} className="text-xs font-semibold text-red-500 bg-red-50 px-3 py-1.5 rounded-lg">Delete</button>
-        <button onClick={() => setConfirming(false)} className="text-xs font-medium text-gray-400 px-2 py-1.5">Cancel</button>
-      </div>
-    )
-  }
-
+function MacroChip({ label, value, unit }: { label: string; value: number; unit: string }) {
   return (
-    <div className="flex items-center gap-3 py-3 border-b border-gray-50 last:border-0">
-      <div className="w-12 h-12 rounded-xl overflow-hidden flex-shrink-0 bg-cream-100">
-        {meal.photo_url ? (
-          <img src={meal.photo_url} alt="meal" className="w-full h-full object-cover" />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center text-2xl">{emoji}</div>
-        )}
-      </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold text-gray-800 capitalize">{meal.meal_type ?? 'Meal'}</p>
-        <p className="text-xs text-gray-400 mt-0.5">{time}</p>
-      </div>
-      <div className="text-right mr-1">
-        <p className="text-sm font-bold text-gray-700">{Math.round(energy)}</p>
-        <p className="text-[10px] text-gray-400">kcal</p>
-      </div>
-      <button onClick={() => setConfirming(true)}
-        className="w-7 h-7 rounded-full hover:bg-red-50 flex items-center justify-center text-gray-200 hover:text-red-400 transition-colors flex-shrink-0">
-        ×
-      </button>
+    <div className="bg-cream-50 rounded-xl py-2 px-1 text-center">
+      <p className="text-[10px] text-gray-400 font-medium">{label}</p>
+      <p className="text-sm font-bold text-gray-700 mt-0.5">{value}<span className="text-[10px] font-normal ml-px">{unit}</span></p>
     </div>
   )
 }
 
 // ── Page ──────────────────────────────────────────────────────────────────────
-
 export default function DashboardPage() {
-  const router = useRouter()
+  const router  = useRouter()
   const supabase = createClient()
 
-  const [profile, setProfile] = useState<UserProfile | null>(null)
-  const [dailyLog, setDailyLog] = useState<DailyLog | null>(null)
-  const [meals, setMeals] = useState<Meal[]>([])
-  const [loading, setLoading] = useState(true)
-  const [nutrients, setNutrients] = useState<Record<string, number>>({})
+  const [profile,     setProfile]     = useState<any>(null)
+  const [meals,       setMeals]       = useState<MealLog[]>([])
+  const [nutrients,   setNutrients]   = useState<NutrientTotals>({ energy_kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 })
+  const [biofeedback, setBiofeedback] = useState<any[]>([])
+  const [cycleLog,    setCycleLog]    = useState<any>(null)
+  const [loading,     setLoading]     = useState(true)
 
-  useEffect(() => {
-    async function load() {
-      setLoading(true)
-      try {
-        const { data: { user } } = await supabase.auth.getUser()
-        if (!user) { router.push('/login'); return }
+  const today       = new Date().toISOString().split('T')[0]
+  const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0]
 
-        const { data: profileData } = await supabase
-          .from('profiles').select('*').eq('id', user.id).single()
+  useEffect(() => { load() }, [])
 
-        if (profileData && !profileData.onboarding_completed) {
-          router.push('/onboarding'); return
-        }
-        setProfile(profileData)
+  async function load() {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) { router.push('/login'); return }
 
-        const today = new Date().toISOString().split('T')[0]
-        const [{ data: logData }, { data: mealsData }] = await Promise.all([
-          supabase.from('daily_logs').select('*').eq('user_id', user.id).eq('date', today).maybeSingle(),
-          supabase.from('meals').select('*').eq('user_id', user.id).eq('meal_date', today).order('logged_at'),
-        ])
+      const [profRes, mealsRes, bioRes, cycleRes] = await Promise.all([
+        supabase.from('profiles').select('*').eq('id', user.id).maybeSingle(),
+        supabase.from('meal_logs').select('*').eq('user_id', user.id)
+          .gte('logged_at', `${today}T00:00:00`).order('logged_at', { ascending: true }),
+        supabase.from('biofeedback_logs').select('*').eq('user_id', user.id)
+          .gte('date', sevenDaysAgo).order('date', { ascending: true }),
+        supabase.from('cycle_logs').select('*').eq('user_id', user.id)
+          .order('period_start', { ascending: false }).limit(1).maybeSingle(),
+      ])
 
-        // Signed URLs for private photo bucket
-        const mealsWithPhotos = await Promise.all(
-          (mealsData ?? []).map(async (meal: Meal) => {
-            if (!meal.photo_storage_path) return meal
-            const { data: signed } = await supabase.storage
-              .from('meal-photos').createSignedUrl(meal.photo_storage_path, 3600)
-            return { ...meal, photo_url: signed?.signedUrl ?? meal.photo_url }
-          })
-        )
+      setProfile(profRes.data)
 
-        setDailyLog(logData)
-        setMeals(mealsWithPhotos)
-        setNutrients((logData?.nutrient_totals as Record<string, number>) ?? {})
-      } catch (e) {
-        console.error('Dashboard load error:', e)
-      } finally {
-        setLoading(false)
+      const mealList: MealLog[] = mealsRes.data ?? []
+      setMeals(mealList)
+
+      const totals: NutrientTotals = { energy_kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 }
+      for (const m of mealList) {
+        const n = m.nutrients ?? {}
+        totals.energy_kcal += n.energy_kcal ?? 0
+        totals.protein_g   += n.protein_g   ?? 0
+        totals.carbs_g     += n.carbs_g     ?? 0
+        totals.fat_g       += n.fat_g       ?? 0
+        totals.fiber_g     += n.fiber_g     ?? 0
       }
+      setNutrients(totals)
+      setBiofeedback(bioRes.data ?? [])
+      setCycleLog(cycleRes.data ?? null)
+    } finally {
+      setLoading(false)
     }
-
-    load()
-    const onVisible = () => { if (document.visibilityState === 'visible') load() }
-    document.addEventListener('visibilitychange', onVisible)
-    return () => document.removeEventListener('visibilitychange', onVisible)
-  }, [])
-
-  async function deleteMeal(meal: Meal) {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
-    const mealNutrients = (meal.nutrient_totals_mid as Record<string, number>) ?? {}
-    const today = new Date().toISOString().split('T')[0]
-    const updated: Record<string, number> = { ...nutrients }
-    for (const [key, val] of Object.entries(mealNutrients)) {
-      updated[key] = Math.max(0, (updated[key] ?? 0) - val)
-    }
-    await supabase.from('food_items').delete().eq('meal_id', meal.id)
-    await supabase.from('meals').delete().eq('id', meal.id)
-    const newCount = Math.max(0, (dailyLog?.meal_count ?? 1) - 1)
-    await supabase.from('daily_logs')
-      .update({ nutrient_totals: updated, meal_count: newCount })
-      .eq('user_id', user.id).eq('date', today)
-    setMeals(prev => prev.filter(m => m.id !== meal.id))
-    setNutrients(updated)
   }
+
+  // ── Derived ──────────────────────────────────────────────────────────────────
+  const energyTarget = profile?.daily_energy_target ?? 0
+  const energyLow    = profile?.energy_range_low  ?? energyTarget
+  const energyHigh   = profile?.energy_range_high ?? energyTarget
+  const showCalories = profile?.show_calories ?? false
+  const isFemale     = profile?.sex === 'female'
+  const firstName    = profile?.display_name || profile?.email?.split('@')[0] || 'there'
+
+  const energyPct    = energyLow > 0 ? Math.min((nutrients.energy_kcal / energyLow) * 100, 100) : 0
+  const nourishScore = loading ? 0 : calcNourishmentScore(nutrients, energyLow, meals)
+
+  function getEnergyLabel() {
+    if (energyLow === 0) return { text: 'Complete your profile for a target', color: 'text-gray-400' }
+    if (energyPct >= 95) return { text: 'Well fuelled today ✓',              color: 'text-sage-600' }
+    if (energyPct >= 75) return { text: 'On track — keep going',              color: 'text-sage-500' }
+    if (energyPct >= 50) return { text: 'Building — keep eating',             color: 'text-amber-500' }
+    if (energyPct >= 25) return { text: 'Big energy gap today',               color: 'text-terracotta-500' }
+    return                     { text: 'Start fuelling your body',            color: 'text-terracotta-400' }
+  }
+  const energyLabel = getEnergyLabel()
+
+  const todayBio = biofeedback.find(b => b.date === today)
+
+  function buildTrend(key: string) {
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(Date.now() - (6 - i) * 86400000).toISOString().split('T')[0]
+      const found = biofeedback.find(b => b.date === d)
+      return { date: d, value: found?.[key] ?? 0 }
+    })
+  }
+
+  function cycleDay() {
+    if (!cycleLog?.period_start) return null
+    const diff = Math.floor((Date.now() - new Date(cycleLog.period_start).getTime()) / 86400000) + 1
+    return diff > 0 ? diff : null
+  }
+  const day = cycleDay()
 
   if (loading) {
     return (
       <div className="min-h-screen bg-cream-50 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 border-2 border-sage-500 border-t-transparent rounded-full animate-spin" />
-          <p className="text-sm text-gray-400">Loading your day…</p>
-        </div>
+        <div className="w-8 h-8 border-2 border-sage-500 border-t-transparent rounded-full animate-spin" />
       </div>
     )
   }
-
-  const totalEnergy   = nutrients.energy_kcal ?? 0
-  const energyTarget  = profile?.daily_energy_target ?? 0
-  const energyLow     = (profile as any)?.energy_range_low  ?? energyTarget
-  const energyHigh    = (profile as any)?.energy_range_high ?? energyTarget
-  const energyPct     = energyLow > 0 ? (totalEnergy / energyLow) * 100 : 0
-  const isOnTrack     = totalEnergy >= energyLow
-  const deficit       = Math.max(0, energyLow - Math.round(totalEnergy))
-
-  const firstName = (profile as any)?.display_name || profile?.email?.split('@')[0] || 'there'
-  const today = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })
 
   return (
     <div className="min-h-screen bg-cream-50 pb-28">
 
       {/* Header */}
       <div className="bg-white px-5 pt-14 pb-5 border-b border-gray-50">
-        <p className="text-xs font-medium text-gray-400 tracking-wide mb-1">{today}</p>
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-gray-900">
-            {getGreeting()}, <span className="text-sage-700 capitalize">{firstName}</span>
-          </h1>
-          <div className="w-9 h-9 rounded-full bg-sage-100 flex items-center justify-center">
-            <span className="text-sm font-bold text-sage-700 capitalize">{firstName[0]?.toUpperCase()}</span>
+        <p className="text-xs font-medium text-gray-400 tracking-wide mb-1">
+          {new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}
+        </p>
+        <div className="flex items-end justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Nest</h1>
+            <p className="text-sm text-gray-400 mt-0.5">Hey {firstName} 👋</p>
           </div>
+          <Link href="/log"
+            className="bg-sage-600 text-white text-xs font-semibold px-4 py-2.5 rounded-xl active:scale-95 transition-all shadow-sm shadow-sage-300/40">
+            + Nourish
+          </Link>
         </div>
       </div>
 
       <div className="px-4 pt-5 space-y-4">
 
-        {/* Energy card */}
+        {/* Nourishment Score */}
         <div className="card p-5 fade-up">
+          <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-4">Nourishment Score</p>
           <div className="flex items-center gap-5">
-            <EnergyRing pct={energyPct} kcal={totalEnergy} low={energyLow} high={energyHigh} />
-            <div className="flex-1 min-w-0">
-              <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Energy</p>
-              <p className="text-3xl font-bold text-gray-900 leading-none">
-                {Math.round(totalEnergy)}
-                <span className="text-base font-normal text-gray-400 ml-1">kcal</span>
-              </p>
-              {energyLow > 0 ? (
-                <div className="mt-2 space-y-0.5">
-                  <p className="text-xs text-gray-400">Min <span className="font-semibold text-gray-600">{Math.round(energyLow)}</span> · Rec <span className="font-semibold text-gray-600">{Math.round(energyLow)}–{Math.round(energyHigh)}</span></p>
-                </div>
-              ) : (
-                <p className="text-xs text-gray-400 mt-1">Complete onboarding for your target</p>
-              )}
-              <div className="mt-2.5 flex items-center gap-1.5">
-                <div className={`w-1.5 h-1.5 rounded-full ${isOnTrack ? 'bg-sage-500' : deficit < energyLow * 0.3 ? 'bg-amber-400' : 'bg-gray-300'}`} />
-                <span className="text-xs text-gray-500">
-                  {isOnTrack ? 'Within target range ✓' : deficit > 0 ? `${deficit} kcal below minimum` : '—'}
-                </span>
-              </div>
+            <NourishmentRing score={nourishScore} />
+            <div className="flex-1 space-y-3">
+              <ScoreRow label="Fuelling"  pct={energyLow > 0 ? energyPct : 0} />
+              <ScoreRow label="Nutrients" pct={Math.min(((nutrients.protein_g / 85) + (nutrients.fiber_g / 25)) / 2 * 100, 100)} />
+              <ScoreRow label="Variety"   pct={Math.min((meals.length / 4) * 100, 100)} />
             </div>
           </div>
+          <p className="text-[10px] text-gray-300 mt-4 text-center">fuelling 40% · nutrients 40% · variety 20%</p>
         </div>
 
-        {/* Key nutrients */}
-        <div className="card p-5 fade-up" style={{ animationDelay: '0.05s' }}>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-bold text-gray-800">Key Nutrients</h2>
-            <span className="text-[11px] text-gray-400 font-medium">% of daily target</span>
-          </div>
-          <div className="grid grid-cols-2 gap-x-5 gap-y-4">
-            {KEY_NUTRIENTS.map(n => (
-              <NutrientBar
-                key={n.key}
-                label={n.label}
-                value={nutrients[n.key] ?? 0}
-                dri={n.dri}
-                unit={n.unit}
-                color={n.color}
+        {/* Energy */}
+        <div className="card p-4 fade-up">
+          <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-3">Energy today</p>
+          {showCalories ? (
+            <div className="flex items-end gap-2">
+              <span className="text-3xl font-bold text-gray-900">{Math.round(nutrients.energy_kcal)}</span>
+              <span className="text-base text-gray-400 mb-0.5">kcal</span>
+              {energyLow > 0 && (
+                <span className="text-xs text-gray-400 mb-0.5 ml-1">/ {Math.round(energyLow)}–{Math.round(energyHigh)}</span>
+              )}
+            </div>
+          ) : (
+            <p className={`text-base font-bold ${energyLabel.color}`}>{energyLabel.text}</p>
+          )}
+          {energyLow > 0 && (
+            <div className="mt-3 h-2 bg-gray-100 rounded-full overflow-hidden">
+              <div className="h-full rounded-full transition-all duration-700"
+                style={{ width: `${energyPct}%`,
+                  backgroundColor: energyPct >= 75 ? '#638c57' : energyPct >= 50 ? '#d4a847' : '#c97b5a' }}
               />
-            ))}
+            </div>
+          )}
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            <MacroChip label="Protein" value={Math.round(nutrients.protein_g)} unit="g" />
+            <MacroChip label="Carbs"   value={Math.round(nutrients.carbs_g)}   unit="g" />
+            <MacroChip label="Fat"     value={Math.round(nutrients.fat_g)}     unit="g" />
           </div>
+          {!showCalories && (
+            <p className="text-[10px] text-gray-300 mt-2 text-center">numbers off · toggle in Profile</p>
+          )}
         </div>
 
-        {/* Today's meals */}
-        <div className="fade-up" style={{ animationDelay: '0.1s' }}>
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-bold text-gray-800">Today's Meals</h2>
-            <span className="text-[11px] text-gray-400 font-medium">{meals.length} logged</span>
-          </div>
-
-          <div className="card overflow-hidden">
-            {meals.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 px-6 text-center">
-                <div className="w-16 h-16 bg-cream-100 rounded-2xl flex items-center justify-center text-3xl mb-3">📷</div>
-                <p className="text-sm font-semibold text-gray-700 mb-1">No meals logged yet</p>
-                <p className="text-xs text-gray-400 mb-5 leading-relaxed">Tap the camera button below to snap a photo — AI will identify everything</p>
-                <Link href="/log" className="bg-sage-600 text-white text-sm font-semibold px-6 py-2.5 rounded-xl hover:bg-sage-700 transition-colors">
-                  Log first meal
-                </Link>
-              </div>
-            ) : (
-              <div className="px-4">
-                {meals.map(meal => (
-                  <MealRow key={meal.id} meal={meal} onDelete={deleteMeal} />
-                ))}
-                <div className="py-3">
-                  <Link href="/log" className="flex items-center justify-center gap-2 text-xs font-semibold text-sage-600 hover:text-sage-700 transition-colors">
-                    <span className="text-base leading-none">+</span> Log another meal
-                  </Link>
+        {/* Meals */}
+        {meals.length > 0 ? (
+          <div className="card p-4 fade-up">
+            <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-3">Today's meals</p>
+            <div className="space-y-2.5">
+              {meals.map(m => (
+                <div key={m.id} className="flex items-center gap-3">
+                  {m.photo_url ? (
+                    <img src={m.photo_url} alt="" className="w-10 h-10 rounded-xl object-cover flex-shrink-0" />
+                  ) : (
+                    <div className="w-10 h-10 rounded-xl bg-cream-100 flex items-center justify-center flex-shrink-0 text-xl">🍽️</div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-gray-800 truncate">{m.meal_name}</p>
+                    <p className="text-xs text-gray-400">
+                      {m.nutrients?.energy_kcal ? `${Math.round(m.nutrients.energy_kcal)} kcal · ` : ''}
+                      {new Date(m.logged_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  </div>
                 </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <Link href="/log" className="block card p-5 text-center fade-up border-2 border-dashed border-sage-200 bg-sage-50/40">
+            <div className="text-3xl mb-2">🍽️</div>
+            <p className="text-sm font-semibold text-sage-600">Log your first meal today</p>
+            <p className="text-xs text-gray-400 mt-1">Tap Nourish to open the camera</p>
+          </Link>
+        )}
+
+        {/* Biofeedback Trends */}
+        {biofeedback.length > 0 ? (
+          <div className="card p-4 fade-up">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">7-day biofeedback</p>
+              <Link href="/notice" className="text-xs text-sage-600 font-semibold">+ today</Link>
+            </div>
+            {todayBio && (
+              <div className="flex flex-wrap gap-1.5 mb-3">
+                {[
+                  { key: 'energy', emoji: '⚡' }, { key: 'mood', emoji: '🧠' },
+                  { key: 'sleep_quality', emoji: '🌙' }, { key: 'recovery', emoji: '💪' },
+                  { key: 'digestion', emoji: '🌿' },
+                ].map(({ key, emoji }) =>
+                  todayBio[key] ? (
+                    <span key={key} className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                      todayBio[key] >= 4 ? 'bg-sage-100 text-sage-700' :
+                      todayBio[key] >= 3 ? 'bg-amber-50 text-amber-600' : 'bg-red-50 text-red-500'
+                    }`}>
+                      {emoji} {todayBio[key]}/5
+                    </span>
+                  ) : null
+                )}
               </div>
             )}
+            <div className="flex gap-2">
+              <BiofeedbackMini label="Energy"    emoji="⚡" data={buildTrend('energy')} />
+              <BiofeedbackMini label="Mood"      emoji="🧠" data={buildTrend('mood')} />
+              <BiofeedbackMini label="Sleep"     emoji="🌙" data={buildTrend('sleep_quality')} />
+              <BiofeedbackMini label="Recovery"  emoji="💪" data={buildTrend('recovery')} />
+              <BiofeedbackMini label="Digestion" emoji="🌿" data={buildTrend('digestion')} />
+            </div>
           </div>
-        </div>
+        ) : (
+          <Link href="/notice" className="block card p-5 text-center fade-up border-2 border-dashed border-cream-200 bg-cream-50/60">
+            <div className="text-3xl mb-2">📋</div>
+            <p className="text-sm font-semibold text-gray-600">Log a Notice check-in</p>
+            <p className="text-xs text-gray-400 mt-1">Track energy, mood, sleep & more</p>
+          </Link>
+        )}
+
+        {/* Cycle Widget — female users only */}
+        {isFemale && (
+          <div className="card p-4 fade-up">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Cycle</p>
+              <Link href="/cycle" className="text-xs text-sage-600 font-semibold">Manage</Link>
+            </div>
+            {day ? (
+              <div className="flex items-center gap-4">
+                <div className="w-16 h-16 rounded-2xl bg-terracotta-50 flex flex-col items-center justify-center flex-shrink-0">
+                  <span className="text-2xl font-bold text-terracotta-600">{day}</span>
+                  <span className="text-[9px] font-medium text-terracotta-400">cycle day</span>
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-gray-700">
+                    {day <= 5 ? 'Menstrual phase' : day <= 13 ? 'Follicular phase' : day <= 16 ? 'Ovulation' : 'Luteal phase'}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {day <= 5  ? 'Rest & prioritise iron-rich foods' :
+                     day <= 13 ? 'Energy building — great time to train' :
+                     day <= 16 ? 'Peak energy & strength' :
+                     'Increase carbs & magnesium-rich foods'}
+                  </p>
+                  <p className="text-[10px] text-gray-300 mt-1">
+                    since {new Date(cycleLog.period_start).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <Link href="/cycle" className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-terracotta-50 flex items-center justify-center flex-shrink-0 text-xl">🌸</div>
+                <div>
+                  <p className="text-sm font-semibold text-terracotta-600">Log your cycle</p>
+                  <p className="text-xs text-gray-400">Get personalised nutrition insights</p>
+                </div>
+              </Link>
+            )}
+          </div>
+        )}
 
       </div>
     </div>

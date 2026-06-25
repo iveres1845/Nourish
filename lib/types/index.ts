@@ -26,6 +26,49 @@ export interface UserProfile {
   ffm_kg: number           // Fat-free mass (Boer formula or body_fat_pct override)
   ea_base_kcal: number     // 45 × FFM_kg
   daily_energy_target: number  // ea_base + 7-day avg exercise EE + NEAT
+  energy_range_low?: number
+  energy_range_high?: number
+
+  // Settings
+  show_calories?: boolean   // false = qualitative language; true = show kcal numbers
+}
+
+// ─── Biofeedback ─────────────────────────────────────────────────────────────
+
+export interface BiofeedbackLog {
+  id: string
+  user_id: string
+  date: string              // YYYY-MM-DD
+  energy?: number           // 1-5
+  mood?: number             // 1-5
+  sleep_quality?: number    // 1-5
+  sleep_hours?: number
+  recovery?: number         // 1-5
+  digestion?: number        // 1-5
+  notes?: string
+  created_at: string
+}
+
+// ─── Cycle ───────────────────────────────────────────────────────────────────
+
+export interface CycleLog {
+  id: string
+  user_id: string
+  period_start: string      // YYYY-MM-DD
+  period_end?: string       // YYYY-MM-DD
+  cycle_length_days?: number
+  notes?: string
+  created_at: string
+}
+
+export interface CycleSymptom {
+  id: string
+  user_id: string
+  date: string              // YYYY-MM-DD
+  symptoms: string[]
+  flow?: 'none' | 'spotting' | 'light' | 'medium' | 'heavy'
+  notes?: string
+  created_at: string
 }
 
 // ─── Energy / Exercise ───────────────────────────────────────────────────────

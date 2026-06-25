@@ -94,6 +94,7 @@ export default function ProfilePage() {
   const [error, setError]       = useState('')
   const [email, setEmail]       = useState('')
   const [displayName, setDisplayName] = useState('')
+  const [showCalories, setShowCalories] = useState(false)
 
   // Body metrics
   const [weight, setWeight]     = useState('')
@@ -133,6 +134,7 @@ export default function ProfilePage() {
       if (!prof) { router.push('/onboarding'); return }
 
       setDisplayName(prof.display_name ?? '')
+      setShowCalories(prof.show_calories ?? false)
       setWeight(String(prof.weight_kg ?? ''))
       setHeight(String(prof.height_cm ?? ''))
       setSex(prof.sex ?? 'female')
@@ -210,6 +212,7 @@ export default function ProfilePage() {
       .from('profiles')
       .update({
         display_name: displayName.trim() || null,
+        show_calories: showCalories,
         weight_kg: w,
         height_cm: h,
         sex,
@@ -476,6 +479,22 @@ export default function ProfilePage() {
           }`}>
           {saving ? 'Saving…' : saved ? '✓ Saved' : 'Save changes'}
         </button>
+
+        {/* Preferences */}
+        <Section title="Preferences">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-gray-700">Show calorie numbers</p>
+              <p className="text-xs text-gray-400 mt-0.5">Off shows qualitative feedback instead</p>
+            </div>
+            <button
+              onClick={() => setShowCalories(prev => !prev)}
+              className={`relative w-11 h-6 rounded-full transition-colors duration-200 ${showCalories ? 'bg-sage-600' : 'bg-gray-200'}`}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform duration-200 ${showCalories ? 'translate-x-5' : 'translate-x-0'}`} />
+            </button>
+          </div>
+        </Section>
 
         {/* Sign out */}
         <button onClick={handleSignOut}

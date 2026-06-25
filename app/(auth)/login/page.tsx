@@ -32,7 +32,7 @@ export default function LoginPage() {
           <span className="text-white text-2xl">🌿</span>
         </div>
         <h1 className="text-3xl font-bold text-sage-800 tracking-tight">nourish</h1>
-        <p className="text-sm text-gray-400 mt-1.5">nutritional sufficiency, not restriction</p>
+        <p className="text-sm text-gray-400 mt-1.5">fuel your body. understand your body.</p>
       </div>
 
       {/* Card */}
