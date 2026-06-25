@@ -1,8 +1,40 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+
+// ── Client-side image compression ────────────────────────────────────────────
+async function compressImage(file: File, maxPx = 1400, quality = 0.85): Promise<File> {
+  return new Promise((resolve) => {
+    const img = new Image()
+    const url = URL.createObjectURL(file)
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      const { width, height } = img
+      const scale = Math.min(1, maxPx / Math.max(width, height))
+      const w = Math.round(width  * scale)
+      const h = Math.round(height * scale)
+
+      const canvas = document.createElement('canvas')
+      canvas.width  = w
+      canvas.height = h
+      const ctx = canvas.getContext('2d')!
+      ctx.drawImage(img, 0, 0, w, h)
+
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) { resolve(file); return }
+          resolve(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' }))
+        },
+        'image/jpeg',
+        quality,
+      )
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file) }
+    img.src = url
+  })
+}
 
 type FoodItem = {
   name: string
@@ -53,6 +85,10 @@ export default function LogPage() {
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [foods, setFoods] = useState<FoodItem[]>([])
   const [error, setError] = useState('')
+
+  // Text mode
+  const [textMode, setTextMode] = useState(false)
+  const [description, setDescription] = useState('')
 
   // History
   const [history, setHistory] = useState<SavedMeal[]>([])
@@ -127,40 +163,59 @@ export default function LogPage() {
     setDeletingId(null)
   }
 
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
-    setImageFile(file)
-    setImagePreview(URL.createObjectURL(file))
     setError('')
+    // Show original preview immediately for responsiveness
+    setImagePreview(URL.createObjectURL(file))
+    // Compress before storing for upload
+    const compressed = await compressImage(file)
+    setImageFile(compressed)
   }
 
   async function handleAnalyse() {
-    if (!imageFile) return
     setStage('analysing')
     setError('')
 
     try {
-      const formData = new FormData()
-      formData.append('image', imageFile)
-      formData.append('meal_type_hint', mealType)
-      if (note) formData.append('user_note', note)
+      let data: AnalysisResult
 
-      const res = await fetch('/api/meals/analyse', { method: 'POST', body: formData })
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: 'Analysis failed. Please try again.' }))
-        throw new Error(body.error ?? 'Analysis failed. Please try again.')
+      if (textMode) {
+        // Text-only path
+        if (!description.trim()) throw new Error('Please describe your meal first')
+        const res = await fetch('/api/meals/analyse-text', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ description, meal_type_hint: mealType }),
+        })
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({ error: 'Analysis failed.' }))
+          throw new Error(body.error ?? 'Analysis failed.')
+        }
+        data = await res.json()
+      } else {
+        // Photo path
+        if (!imageFile) throw new Error('No image selected')
+        const formData = new FormData()
+        formData.append('image', imageFile)
+        formData.append('meal_type_hint', mealType)
+        if (note) formData.append('user_note', note)
+
+        const res = await fetch('/api/meals/analyse', { method: 'POST', body: formData })
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({ error: 'Analysis failed. Please try again.' }))
+          throw new Error(body.error ?? 'Analysis failed. Please try again.')
+        }
+        data = await res.json()
       }
 
-      const data: AnalysisResult = await res.json()
       setResult(data)
-
-      const allFoods = [
+      setFoods([
         ...data.enriched_foods,
         ...(data.oil_item ? [data.oil_item] : []),
         ...data.enriched_mixed_dishes,
-      ]
-      setFoods(allFoods)
+      ])
       setStage('confirm')
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Analysis failed. Please try again.')
@@ -320,18 +375,24 @@ export default function LogPage() {
   // ── Analysing ─────────────────────────────────────────────────────────────
   if (stage === 'analysing') {
     return (
-      <div className="min-h-screen bg-cream-50 flex flex-col items-center justify-center gap-5">
-        {imagePreview && (
+      <div className="min-h-screen bg-cream-50 flex flex-col items-center justify-center gap-5 px-6">
+        {imagePreview && !textMode ? (
           <div className="relative">
             <img src={imagePreview} alt="meal" className="w-64 h-64 object-cover rounded-3xl shadow-lg" />
             <div className="absolute inset-0 rounded-3xl bg-black/10" />
           </div>
-        )}
+        ) : textMode ? (
+          <div className="w-16 h-16 bg-sage-50 rounded-2xl flex items-center justify-center text-3xl">📝</div>
+        ) : null}
         <div className="flex flex-col items-center gap-3">
           <div className="w-8 h-8 border-2 border-sage-500 border-t-transparent rounded-full animate-spin" />
           <div className="text-center">
-            <p className="text-sm font-semibold text-gray-700">Analysing your meal…</p>
-            <p className="text-xs text-gray-400 mt-0.5">AI is identifying foods and nutrients</p>
+            <p className="text-sm font-semibold text-gray-700">
+              {textMode ? 'Parsing your description…' : 'Analysing your meal…'}
+            </p>
+            <p className="text-xs text-gray-400 mt-0.5">
+              {textMode ? 'AI is estimating portions and nutrients' : 'AI is identifying foods and nutrients'}
+            </p>
           </div>
         </div>
       </div>
@@ -361,16 +422,22 @@ export default function LogPage() {
           </div>
         </div>
 
-        {imagePreview && (
-          <div className="mx-4 mt-4">
+        <div className="mx-4 mt-4">
+          {imagePreview && !textMode ? (
             <div className="rounded-2xl overflow-hidden shadow-sm">
               <img src={imagePreview} alt="meal" className="w-full h-44 object-cover" />
               <div className="bg-white px-4 py-2.5 border-t border-gray-50">
                 <p className="text-xs text-gray-500 italic">{result.vision.meal_description}</p>
               </div>
             </div>
-          </div>
-        )}
+          ) : (
+            <div className="bg-cream-50 border border-cream-200 rounded-2xl px-4 py-3">
+              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1">Your description</p>
+              <p className="text-sm text-gray-600 italic">{description}</p>
+              <p className="text-[10px] text-gray-400 mt-2">✦ AI has estimated portions from your description</p>
+            </div>
+          )}
+        </div>
 
         <div className="mx-4 mt-4">
           <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">
@@ -436,40 +503,98 @@ export default function LogPage() {
       </div>
 
       <div className="p-4 space-y-3">
-        {/* Photo upload */}
-        <div
-          onClick={() => fileRef.current?.click()}
-          className={`relative rounded-3xl overflow-hidden cursor-pointer transition-all active:scale-[0.98] ${
-            imagePreview
-              ? 'shadow-md'
-              : 'border-2 border-dashed border-gray-200 hover:border-sage-300 bg-white hover:bg-cream-50'
-          }`}
-        >
-          {imagePreview ? (
-            <div className="relative">
-              <img src={imagePreview} alt="meal preview" className="w-full h-64 object-cover" />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/30 to-transparent" />
-              <div className="absolute bottom-3 left-0 right-0 text-center">
-                <span className="text-white text-xs font-medium bg-black/30 backdrop-blur-sm px-3 py-1.5 rounded-full">
-                  Tap to change
-                </span>
-              </div>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center h-56 gap-3">
-              <div className="w-16 h-16 bg-sage-50 rounded-2xl flex items-center justify-center">
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#638c57" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
-                  <circle cx="12" cy="13" r="4"/>
-                </svg>
-              </div>
-              <div className="text-center">
-                <p className="text-sm font-semibold text-gray-700">Add a photo</p>
-                <p className="text-xs text-gray-400 mt-0.5">Camera or photo library</p>
-              </div>
-            </div>
-          )}
+
+        {/* Mode toggle */}
+        <div className="flex bg-cream-100 rounded-2xl p-1">
+          <button
+            onClick={() => { setTextMode(false); setError('') }}
+            className={`flex-1 py-2.5 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${
+              !textMode ? 'bg-white text-sage-700 shadow-sm' : 'text-gray-400'
+            }`}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
+              <circle cx="12" cy="13" r="4"/>
+            </svg>
+            Photo
+          </button>
+          <button
+            onClick={() => { setTextMode(true); setError('') }}
+            className={`flex-1 py-2.5 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${
+              textMode ? 'bg-white text-sage-700 shadow-sm' : 'text-gray-400'
+            }`}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>
+            </svg>
+            Describe
+          </button>
         </div>
+
+        {!textMode ? (
+          <>
+            {/* Photo upload */}
+            <div
+              onClick={() => fileRef.current?.click()}
+              className={`relative rounded-3xl overflow-hidden cursor-pointer transition-all active:scale-[0.98] ${
+                imagePreview
+                  ? 'shadow-md'
+                  : 'border-2 border-dashed border-gray-200 hover:border-sage-300 bg-white hover:bg-cream-50'
+              }`}
+            >
+              {imagePreview ? (
+                <div className="relative">
+                  <img src={imagePreview} alt="meal preview" className="w-full h-64 object-cover" />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/30 to-transparent" />
+                  <div className="absolute bottom-3 left-0 right-0 text-center">
+                    <span className="text-white text-xs font-medium bg-black/30 backdrop-blur-sm px-3 py-1.5 rounded-full">
+                      Tap to change
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center h-56 gap-3">
+                  <div className="w-16 h-16 bg-sage-50 rounded-2xl flex items-center justify-center">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#638c57" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
+                      <circle cx="12" cy="13" r="4"/>
+                    </svg>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-sm font-semibold text-gray-700">Add a photo</p>
+                    <p className="text-xs text-gray-400 mt-0.5">Camera or photo library</p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Optional note */}
+            <div className="card p-4">
+              <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Add a note <span className="font-normal">(optional)</span></p>
+              <textarea
+                value={note}
+                onChange={e => setNote(e.target.value)}
+                placeholder="e.g. home-cooked, extra olive oil, added cheese…"
+                rows={2}
+                className="w-full text-sm text-gray-700 placeholder-gray-300 resize-none focus:outline-none bg-transparent"
+              />
+            </div>
+          </>
+        ) : (
+          /* Text mode */
+          <div className="card p-4">
+            <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1">Describe your meal</p>
+            <p className="text-xs text-gray-400 mb-3">Be specific about portions — e.g. "a cup of rice, half plate of salad with olive oil dressing, quarter plate of chicken thighs cooked in oil"</p>
+            <textarea
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              placeholder="e.g. about a cup of cooked jasmine rice, half a plate of mixed salad with olive oil dressing, and roughly a quarter plate of grilled chicken thighs…"
+              rows={5}
+              autoFocus
+              className="w-full text-sm text-gray-700 placeholder-gray-300 resize-none focus:outline-none bg-transparent leading-relaxed"
+            />
+          </div>
+        )}
 
         <input ref={fileRef} type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
 
@@ -488,24 +613,15 @@ export default function LogPage() {
           </div>
         </div>
 
-        {/* Optional note */}
-        <div className="card p-4">
-          <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Add a note</p>
-          <textarea
-            value={note}
-            onChange={e => setNote(e.target.value)}
-            placeholder="e.g. home-cooked, extra olive oil, added cheese…"
-            rows={2}
-            className="w-full text-sm text-gray-700 placeholder-gray-300 resize-none focus:outline-none bg-transparent"
-          />
-        </div>
-
         {error && <p className="text-sm text-red-500 bg-red-50 rounded-xl px-4 py-3">{error}</p>}
 
         {/* Analyse button */}
-        <button onClick={handleAnalyse} disabled={!imageFile}
-          className="w-full bg-sage-600 hover:bg-sage-700 active:bg-sage-800 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold py-4 rounded-2xl text-sm transition-all shadow-lg shadow-sage-300/40 active:scale-[0.98]">
-          Analyse with AI
+        <button
+          onClick={handleAnalyse}
+          disabled={textMode ? description.trim().length < 5 : !imageFile}
+          className="w-full bg-sage-600 hover:bg-sage-700 active:bg-sage-800 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold py-4 rounded-2xl text-sm transition-all shadow-lg shadow-sage-300/40 active:scale-[0.98]"
+        >
+          {textMode ? 'Analyse description' : 'Analyse with AI'}
         </button>
 
         {/* ── Meal History ────────────────────────────────────────────────── */}
