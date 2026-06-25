@@ -65,7 +65,7 @@ Portion estimation rules:
 - "half plate of salad" = ~120–180g vegetables
 - "quarter plate of chicken thighs" = ~120–160g cooked
 - 1 tablespoon of oil/dressing = ~13–15g
-- Be realistic, not conservative — people tend to eat more than label serving sizes
+- Aim for accuracy — the midpoint should be your honest best estimate, not skewed in either direction
 - If oil/dressing is mentioned, include it in the oil fields
 - Set confidence 0.6–0.8 for text-described meals (lower than photo analysis)
 

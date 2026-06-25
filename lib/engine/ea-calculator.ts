@@ -142,10 +142,10 @@ export interface EAResult {
 }
 
 const GOAL_RANGES: Record<string, { low_pct: number; high_pct: number }> = {
-  general_wellness: { low_pct: 0.90, high_pct: 1.20 },
-  hormonal:        { low_pct: 0.92, high_pct: 1.25 },
-  athletic:        { low_pct: 0.95, high_pct: 1.30 },
-  gut_health:      { low_pct: 0.90, high_pct: 1.20 },
+  general_wellness: { low_pct: 0.90, high_pct: 1.18 },
+  hormonal:        { low_pct: 1.00, high_pct: 1.25 },
+  athletic:        { low_pct: 1.00, high_pct: 1.28 },
+  gut_health:      { low_pct: 0.90, high_pct: 1.15 },
 }
 
 /**
@@ -203,6 +203,50 @@ export function computeDailyEnergyTarget(params: {
     range_high: Math.round(daily_energy_target * high_pct),
     flag_direction: 'low_only',
   }
+}
+
+// ─── Bottom-Hugging Check ────────────────────────────────────────────────────
+
+/**
+ * Detects when a user is consistently fuelling at the very bottom of their
+ * range — technically "in range" but not in the spirit of the target.
+ *
+ * Bottom zone = range_low to range_low + 10% of total range width.
+ * Triggers if 4+ of the last 7 days fall in this zone.
+ *
+ * Returns a nudge message if triggered, null otherwise.
+ */
+export function checkBottomHugging(params: {
+  recentIntakes: number[]   // up to 7 days, kcal/day, most recent first
+  range_low: number
+  range_high: number
+  goals: string[]
+}): { triggered: boolean; message: string | null } {
+  const { recentIntakes, range_low, range_high, goals } = params
+
+  const rangeWidth = range_high - range_low
+  const bottomZoneTop = range_low + rangeWidth * 0.25  // bottom 25% of range
+
+  const days = recentIntakes.slice(0, 7)
+  if (days.length < 4) return { triggered: false, message: null }
+
+  const bottomDays = days.filter(kcal => kcal >= range_low && kcal <= bottomZoneTop).length
+
+  if (bottomDays < 4) return { triggered: false, message: null }
+
+  const isAthlete = goals.includes('athletic')
+  const isHormonal = goals.includes('hormonal')
+
+  let message = 'You\'ve been fuelling right at your minimum most days this week.'
+  if (isAthlete) {
+    message += ' For athletic performance, a little more consistently would support recovery and adaptation.'
+  } else if (isHormonal) {
+    message += ' For hormone health, eating a bit more consistently — even just a snack — makes a real difference.'
+  } else {
+    message += ' Try adding a snack or a little more at meals to give your body more to work with.'
+  }
+
+  return { triggered: true, message }
 }
 
 // ─── RED-S Check ─────────────────────────────────────────────────────────────

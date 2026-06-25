@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { checkBottomHugging } from '@/lib/engine/ea-calculator'
 import type { UserProfile } from '@/lib/types'
 
 // ─── DRI reference table ──────────────────────────────────────────────────────
@@ -456,6 +457,7 @@ export default function InsightsPage() {
   const [noData, setNoData] = useState(false)
   const [view, setView] = useState<'today' | '7day'>('today')
   const [patterns, setPatterns] = useState<CorrelationPattern[]>([])
+  const [bottomHugMessage, setBottomHugMessage] = useState<string | null>(null)
 
   useEffect(() => {
     async function load() {
@@ -556,6 +558,20 @@ export default function InsightsPage() {
         )
         setPatterns(computed)
       }
+
+      // Bottom-hugging check: last 7 days of energy intakes, most recent first
+      const energyHigh = prof.energy_range_high ?? (low * 1.25)
+      const recentIntakes = allNutritionDays
+        .slice().sort((a, b) => b.date.localeCompare(a.date))
+        .slice(0, 7)
+        .map(d => ((d.nutrient_totals as Record<string, number>)?.energy_kcal ?? 0))
+      const { triggered, message } = checkBottomHugging({
+        recentIntakes,
+        range_low: low,
+        range_high: energyHigh,
+        goals: prof.goals ?? [],
+      })
+      if (triggered) setBottomHugMessage(message)
 
       if (!log && names.length === 0) {
         setNoData(true)
@@ -688,6 +704,24 @@ export default function InsightsPage() {
             {wins.map(insight => (
               <InsightCard key={insight.id} insight={insight} />
             ))}
+
+            {/* Bottom-hugging nudge — priority alert when consistently at minimum */}
+            {bottomHugMessage && (
+              <div className="mt-4 mb-2 fade-up">
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                  <div className="flex items-start gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-amber-100 flex items-center justify-center flex-shrink-0 text-lg">🔆</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <p className="text-sm font-bold text-gray-800">Fuelling right at your minimum</p>
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">THIS WEEK</span>
+                      </div>
+                      <p className="text-xs text-gray-600 leading-relaxed">{bottomHugMessage}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Correlation Patterns — only show when we have enough data */}
             {patterns.length > 0 && (

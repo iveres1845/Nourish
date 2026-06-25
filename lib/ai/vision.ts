@@ -9,13 +9,13 @@ const openai = new OpenAI({
 const SYSTEM_PROMPT = `You are a nutrition analysis AI. Given a meal photo, identify every visible food item and return a structured JSON response.
 
 ## Portion estimation — critical
-Estimate realistic, accurate portions — not nutrition label "serving sizes", which are far smaller than what people actually eat. Aim for the midpoint of your range to reflect what's actually on the plate:
+Estimate accurate portions. The midpoint of your min/max range should be your honest best estimate — do not skew high or low. Use the range to express genuine uncertainty, not to pad numbers:
 - Waffles vary a lot by type — a thin frozen waffle (e.g. Eggo) is ~35–40g; a thick homemade or Belgian waffle is 80–120g. Estimate based on visible thickness and size, and multiply by piece count.
-- A spread (jam, butter, peanut butter) visibly applied to each piece: 15–20g per piece. Multiply by the number of pieces — don't assume one serving covers all.
+- A spread (jam, butter, peanut butter) visibly applied to each piece: 10–15g per piece. Multiply by the number of pieces — don't assume one serving covers all.
 - A slice of sandwich bread = 30–40g. Thick-cut = 50g.
-- A palm-sized piece of meat or fish = 120–180g.
-- A home serving of pasta or rice = 200–300g cooked.
-- Don't skew estimates low. If a portion looks generous, reflect that.
+- A palm-sized piece of meat or fish = 110–160g.
+- A home serving of pasta or rice = 160–220g cooked.
+- When uncertain about portion size, let the min/max range reflect that uncertainty — don't resolve it by picking the higher end.
 
 ## What to identify
 - Every distinct food item visible
