@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import Link from 'next/link'
 
 // ── Types ────────────────────────────────────────────────────────────────────
-interface MealLog { id: string; meal_name: string; photo_url?: string; logged_at: string; nutrients?: any }
+interface MealRow { id: string; meal_type: string; photo_url?: string; meal_date: string; nutrient_totals_mid?: any }
 interface NutrientTotals { energy_kcal: number; protein_g: number; carbs_g: number; fat_g: number; fiber_g: number }
 
 // ── Nourishment Score helpers ─────────────────────────────────────────────────
@@ -105,7 +105,7 @@ export default function DashboardPage() {
   const supabase = createClient()
 
   const [profile,     setProfile]     = useState<any>(null)
-  const [meals,       setMeals]       = useState<MealLog[]>([])
+  const [meals,       setMeals]       = useState<MealRow[]>([])
   const [nutrients,   setNutrients]   = useState<NutrientTotals>({ energy_kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 })
   const [biofeedback, setBiofeedback] = useState<any[]>([])
   const [cycleLog,    setCycleLog]    = useState<any>(null)
@@ -121,10 +121,12 @@ export default function DashboardPage() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { router.push('/login'); return }
 
-      const [profRes, mealsRes, bioRes, cycleRes] = await Promise.all([
+      const [profRes, mealsRes, dailyRes, bioRes, cycleRes] = await Promise.all([
         supabase.from('profiles').select('*').eq('id', user.id).maybeSingle(),
-        supabase.from('meal_logs').select('*').eq('user_id', user.id)
-          .gte('logged_at', `${today}T00:00:00`).order('logged_at', { ascending: true }),
+        supabase.from('meals').select('id, meal_type, photo_url, meal_date, nutrient_totals_mid')
+          .eq('user_id', user.id).eq('meal_date', today).order('meal_date', { ascending: true }),
+        supabase.from('daily_logs').select('nutrient_totals')
+          .eq('user_id', user.id).eq('date', today).maybeSingle(),
         supabase.from('biofeedback_logs').select('*').eq('user_id', user.id)
           .gte('date', sevenDaysAgo).order('date', { ascending: true }),
         supabase.from('cycle_logs').select('*').eq('user_id', user.id)
@@ -132,20 +134,17 @@ export default function DashboardPage() {
       ])
 
       setProfile(profRes.data)
+      setMeals(mealsRes.data ?? [])
 
-      const mealList: MealLog[] = mealsRes.data ?? []
-      setMeals(mealList)
-
-      const totals: NutrientTotals = { energy_kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 }
-      for (const m of mealList) {
-        const n = m.nutrients ?? {}
-        totals.energy_kcal += n.energy_kcal ?? 0
-        totals.protein_g   += n.protein_g   ?? 0
-        totals.carbs_g     += n.carbs_g     ?? 0
-        totals.fat_g       += n.fat_g       ?? 0
-        totals.fiber_g     += n.fiber_g     ?? 0
-      }
-      setNutrients(totals)
+      // nutrient totals come from daily_logs (pre-aggregated on save)
+      const nt = dailyRes.data?.nutrient_totals ?? {}
+      setNutrients({
+        energy_kcal: nt.energy_kcal ?? 0,
+        protein_g:   nt.protein_g   ?? 0,
+        carbs_g:     nt.carbohydrate_g ?? nt.carbs_g ?? 0,
+        fat_g:       nt.fat_g       ?? 0,
+        fiber_g:     nt.fiber_g     ?? 0,
+      })
       setBiofeedback(bioRes.data ?? [])
       setCycleLog(cycleRes.data ?? null)
     } finally {
@@ -272,22 +271,27 @@ export default function DashboardPage() {
           <div className="card p-4 fade-up">
             <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-3">Today's meals</p>
             <div className="space-y-2.5">
-              {meals.map(m => (
-                <div key={m.id} className="flex items-center gap-3">
-                  {m.photo_url ? (
-                    <img src={m.photo_url} alt="" className="w-10 h-10 rounded-xl object-cover flex-shrink-0" />
-                  ) : (
-                    <div className="w-10 h-10 rounded-xl bg-cream-100 flex items-center justify-center flex-shrink-0 text-xl">🍽️</div>
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-gray-800 truncate">{m.meal_name}</p>
-                    <p className="text-xs text-gray-400">
-                      {m.nutrients?.energy_kcal ? `${Math.round(m.nutrients.energy_kcal)} kcal · ` : ''}
-                      {new Date(m.logged_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </p>
+              {meals.map(m => {
+                const kcal = m.nutrient_totals_mid?.energy_kcal
+                const label = m.meal_type
+                  ? m.meal_type.charAt(0).toUpperCase() + m.meal_type.slice(1).replace(/_/g, ' ')
+                  : 'Meal'
+                return (
+                  <div key={m.id} className="flex items-center gap-3">
+                    {m.photo_url ? (
+                      <img src={m.photo_url} alt="" className="w-10 h-10 rounded-xl object-cover flex-shrink-0" />
+                    ) : (
+                      <div className="w-10 h-10 rounded-xl bg-cream-100 flex items-center justify-center flex-shrink-0 text-xl">🍽️</div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-gray-800 truncate">{label}</p>
+                      <p className="text-xs text-gray-400">
+                        {kcal ? `${Math.round(kcal)} kcal` : 'logged'}
+                      </p>
+                    </div>
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         ) : (

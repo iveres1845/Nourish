@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
@@ -29,6 +29,15 @@ type AnalysisResult = {
   }
 }
 
+type SavedMeal = {
+  id: string
+  meal_type: string
+  meal_date: string
+  photo_url?: string
+  nutrient_totals_mid?: Record<string, number>
+  food_items?: Array<{ id: string; name: string; portion_g_mid: number; nutrients_mid: Record<string, number>; prep_method: string }>
+}
+
 const MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'snack']
 
 export default function LogPage() {
@@ -44,6 +53,79 @@ export default function LogPage() {
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [foods, setFoods] = useState<FoodItem[]>([])
   const [error, setError] = useState('')
+
+  // History
+  const [history, setHistory] = useState<SavedMeal[]>([])
+  const [historyLoading, setHistoryLoading] = useState(true)
+  const [expandedMealId, setExpandedMealId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+
+  useEffect(() => { loadHistory() }, [])
+
+  async function loadHistory() {
+    setHistoryLoading(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+
+    const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0]
+    const { data } = await supabase
+      .from('meals')
+      .select('id, meal_type, meal_date, photo_url, nutrient_totals_mid')
+      .eq('user_id', user.id)
+      .gte('meal_date', sevenDaysAgo)
+      .order('meal_date', { ascending: false })
+
+    setHistory(data ?? [])
+    setHistoryLoading(false)
+  }
+
+  async function loadFoodItems(mealId: string) {
+    const { data } = await supabase
+      .from('food_items')
+      .select('id, name, portion_g_mid, nutrients_mid, prep_method')
+      .eq('meal_id', mealId)
+
+    setHistory(prev => prev.map(m =>
+      m.id === mealId ? { ...m, food_items: data ?? [] } : m
+    ))
+  }
+
+  async function deleteMeal(meal: SavedMeal) {
+    setDeletingId(meal.id)
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+
+    // Subtract from daily_logs
+    const { data: log } = await supabase
+      .from('daily_logs')
+      .select('nutrient_totals, meal_count')
+      .eq('user_id', user.id)
+      .eq('date', meal.meal_date)
+      .maybeSingle()
+
+    if (log && meal.nutrient_totals_mid) {
+      const updated: Record<string, number> = { ...(log.nutrient_totals as Record<string, number>) }
+      for (const [key, val] of Object.entries(meal.nutrient_totals_mid)) {
+        updated[key] = Math.max(0, (updated[key] ?? 0) - val)
+      }
+      const newCount = Math.max(0, (log.meal_count ?? 1) - 1)
+      if (newCount === 0) {
+        await supabase.from('daily_logs').delete().eq('user_id', user.id).eq('date', meal.meal_date)
+      } else {
+        await supabase.from('daily_logs')
+          .update({ nutrient_totals: updated, meal_count: newCount })
+          .eq('user_id', user.id).eq('date', meal.meal_date)
+      }
+    }
+
+    // Delete food_items then meal
+    await supabase.from('food_items').delete().eq('meal_id', meal.id)
+    await supabase.from('meals').delete().eq('id', meal.id)
+
+    setHistory(prev => prev.filter(m => m.id !== meal.id))
+    if (expandedMealId === meal.id) setExpandedMealId(null)
+    setDeletingId(null)
+  }
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -98,7 +180,6 @@ export default function LogPage() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { router.push('/login'); return }
 
-      // Upload photo to Supabase Storage
       let photoUrl: string | null = null
       let storagePath: string | null = null
 
@@ -113,11 +194,8 @@ export default function LogPage() {
           const { data: urlData } = supabase.storage.from('meal-photos').getPublicUrl(storagePath)
           photoUrl = urlData.publicUrl
         }
-      } catch {
-        // Photo upload failure is non-fatal
-      }
+      } catch { /* non-fatal */ }
 
-      // Sum nutrient totals across confirmed foods
       const totalsMid: Record<string, number> = {}
       const totalsMin: Record<string, number> = {}
       const totalsMax: Record<string, number> = {}
@@ -136,7 +214,6 @@ export default function LogPage() {
 
       const today = new Date().toISOString().split('T')[0]
 
-      // Insert meal
       const { data: meal, error: mealError } = await supabase
         .from('meals')
         .insert({
@@ -156,7 +233,6 @@ export default function LogPage() {
 
       if (mealError) throw mealError
 
-      // Insert food items
       const foodRows = foods.map(food => ({
         meal_id: meal.id,
         user_id: user.id,
@@ -175,7 +251,6 @@ export default function LogPage() {
 
       await supabase.from('food_items').insert(foodRows)
 
-      // Upsert daily log
       const { data: existingLog } = await supabase
         .from('daily_logs')
         .select('nutrient_totals, meal_count')
@@ -190,8 +265,7 @@ export default function LogPage() {
         }
         await supabase.from('daily_logs')
           .update({ nutrient_totals: merged, meal_count: (existingLog.meal_count ?? 0) + 1, updated_at: new Date().toISOString() })
-          .eq('user_id', user.id)
-          .eq('date', today)
+          .eq('user_id', user.id).eq('date', today)
       } else {
         await supabase.from('daily_logs').insert({
           user_id: user.id,
@@ -210,7 +284,23 @@ export default function LogPage() {
     }
   }
 
-  // ── Done ──
+  // ── Group history by date ─────────────────────────────────────────────────
+  const today = new Date().toISOString().split('T')[0]
+  const grouped: Record<string, SavedMeal[]> = {}
+  for (const m of history) {
+    if (!grouped[m.meal_date]) grouped[m.meal_date] = []
+    grouped[m.meal_date].push(m)
+  }
+  const sortedDates = Object.keys(grouped).sort((a, b) => b.localeCompare(a))
+
+  function dateLabel(d: string) {
+    if (d === today) return 'Today'
+    const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0]
+    if (d === yesterday) return 'Yesterday'
+    return new Date(d).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' })
+  }
+
+  // ── Done ──────────────────────────────────────────────────────────────────
   if (stage === 'done') {
     return (
       <div className="min-h-screen bg-cream-50 flex items-center justify-center">
@@ -221,13 +311,13 @@ export default function LogPage() {
             </svg>
           </div>
           <p className="text-xl font-bold text-gray-900">Meal saved</p>
-          <p className="text-sm text-gray-400 mt-1">Heading back to your dashboard…</p>
+          <p className="text-sm text-gray-400 mt-1">Heading back to Nest…</p>
         </div>
       </div>
     )
   }
 
-  // ── Analysing ──
+  // ── Analysing ─────────────────────────────────────────────────────────────
   if (stage === 'analysing') {
     return (
       <div className="min-h-screen bg-cream-50 flex flex-col items-center justify-center gap-5">
@@ -248,13 +338,12 @@ export default function LogPage() {
     )
   }
 
-  // ── Confirm ──
+  // ── Confirm ───────────────────────────────────────────────────────────────
   if (stage === 'confirm' && result) {
     const totalEnergy = foods.reduce((sum, f) => sum + (f.nutrients_mid?.energy_kcal ?? 0), 0)
 
     return (
       <div className="min-h-screen bg-cream-50 pb-36">
-        {/* Header */}
         <div className="bg-white px-5 pt-14 pb-4 border-b border-gray-50">
           <button onClick={() => setStage('capture')} className="flex items-center gap-1 text-sm text-gray-400 hover:text-gray-600 mb-3 transition-colors">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
@@ -272,7 +361,6 @@ export default function LogPage() {
           </div>
         </div>
 
-        {/* Photo */}
         {imagePreview && (
           <div className="mx-4 mt-4">
             <div className="rounded-2xl overflow-hidden shadow-sm">
@@ -284,7 +372,6 @@ export default function LogPage() {
           </div>
         )}
 
-        {/* Food items */}
         <div className="mx-4 mt-4">
           <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">
             {foods.length} item{foods.length !== 1 ? 's' : ''} identified
@@ -329,7 +416,6 @@ export default function LogPage() {
           </div>
         )}
 
-        {/* Save button */}
         <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[430px] p-4 pb-[84px] bg-cream-50/90 backdrop-blur-sm border-t border-gray-100 z-40">
           <button onClick={handleSave}
             className="w-full bg-sage-600 hover:bg-sage-700 active:bg-sage-800 text-white font-semibold py-4 rounded-2xl text-sm transition-all shadow-lg shadow-sage-300/40 active:scale-[0.98]">
@@ -340,17 +426,17 @@ export default function LogPage() {
     )
   }
 
-  // ── Capture (default) ──
+  // ── Capture (default) ─────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-cream-50 pb-28">
       {/* Header */}
       <div className="bg-white px-5 pt-14 pb-5 border-b border-gray-50">
-        <h1 className="text-2xl font-bold text-gray-900">Log a meal</h1>
+        <h1 className="text-2xl font-bold text-gray-900">Nourish</h1>
         <p className="text-sm text-gray-400 mt-1">Snap a photo — AI identifies everything</p>
       </div>
 
       <div className="p-4 space-y-3">
-        {/* Photo upload area */}
+        {/* Photo upload */}
         <div
           onClick={() => fileRef.current?.click()}
           className={`relative rounded-3xl overflow-hidden cursor-pointer transition-all active:scale-[0.98] ${
@@ -421,6 +507,146 @@ export default function LogPage() {
           className="w-full bg-sage-600 hover:bg-sage-700 active:bg-sage-800 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold py-4 rounded-2xl text-sm transition-all shadow-lg shadow-sage-300/40 active:scale-[0.98]">
           Analyse with AI
         </button>
+
+        {/* ── Meal History ────────────────────────────────────────────────── */}
+        <div className="pt-4">
+          <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-3">Recent meals</p>
+
+          {historyLoading ? (
+            <div className="flex justify-center py-6">
+              <div className="w-6 h-6 border-2 border-sage-400 border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : history.length === 0 ? (
+            <p className="text-sm text-gray-400 text-center py-6">No meals logged yet</p>
+          ) : (
+            <div className="space-y-4">
+              {sortedDates.map(date => (
+                <div key={date}>
+                  {/* Date header */}
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xs font-bold text-gray-500">{dateLabel(date)}</span>
+                    <div className="flex-1 h-px bg-gray-100" />
+                    <span className="text-[10px] text-gray-300">
+                      {grouped[date].reduce((s, m) => s + (m.nutrient_totals_mid?.energy_kcal ?? 0), 0) > 0
+                        ? `${Math.round(grouped[date].reduce((s, m) => s + (m.nutrient_totals_mid?.energy_kcal ?? 0), 0))} kcal`
+                        : ''}
+                    </span>
+                  </div>
+
+                  {/* Meals for this date */}
+                  <div className="space-y-2">
+                    {grouped[date].map(meal => {
+                      const isExpanded = expandedMealId === meal.id
+                      const kcal = meal.nutrient_totals_mid?.energy_kcal
+                      const label = meal.meal_type
+                        ? meal.meal_type.charAt(0).toUpperCase() + meal.meal_type.slice(1).replace(/_/g, ' ')
+                        : 'Meal'
+
+                      return (
+                        <div key={meal.id} className="card overflow-hidden">
+                          {/* Meal row */}
+                          <button
+                            className="w-full flex items-center gap-3 p-3 text-left active:bg-cream-50 transition-colors"
+                            onClick={() => {
+                              if (isExpanded) {
+                                setExpandedMealId(null)
+                              } else {
+                                setExpandedMealId(meal.id)
+                                if (!meal.food_items) loadFoodItems(meal.id)
+                              }
+                            }}
+                          >
+                            {meal.photo_url ? (
+                              <img src={meal.photo_url} alt="" className="w-12 h-12 rounded-xl object-cover flex-shrink-0" />
+                            ) : (
+                              <div className="w-12 h-12 rounded-xl bg-cream-100 flex items-center justify-center flex-shrink-0 text-2xl">🍽️</div>
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-bold text-gray-800">{label}</p>
+                              <p className="text-xs text-gray-400">
+                                {kcal ? `${Math.round(kcal)} kcal` : 'tap to see details'}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              <svg
+                                width="16" height="16" viewBox="0 0 24 24" fill="none"
+                                stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+                                className={`text-gray-300 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}
+                              >
+                                <polyline points="6 9 12 15 18 9" />
+                              </svg>
+                            </div>
+                          </button>
+
+                          {/* Expanded food items */}
+                          {isExpanded && (
+                            <div className="border-t border-gray-50 px-3 pb-3">
+                              {!meal.food_items ? (
+                                <div className="flex justify-center py-4">
+                                  <div className="w-5 h-5 border-2 border-sage-400 border-t-transparent rounded-full animate-spin" />
+                                </div>
+                              ) : (
+                                <>
+                                  <div className="pt-3 space-y-2">
+                                    {meal.food_items.map(item => (
+                                      <div key={item.id} className="flex items-center justify-between">
+                                        <div>
+                                          <p className="text-sm text-gray-700 capitalize font-medium">{item.name}</p>
+                                          <p className="text-xs text-gray-400">
+                                            ~{Math.round(item.portion_g_mid)}g
+                                            {item.prep_method && item.prep_method !== 'unknown' && ` · ${item.prep_method}`}
+                                          </p>
+                                        </div>
+                                        <p className="text-xs font-semibold text-gray-600 flex-shrink-0 ml-3">
+                                          {Math.round(item.nutrients_mid?.energy_kcal ?? 0)} kcal
+                                        </p>
+                                      </div>
+                                    ))}
+                                  </div>
+
+                                  {/* Macro summary */}
+                                  {meal.nutrient_totals_mid && (
+                                    <div className="mt-3 flex gap-2">
+                                      {[
+                                        { label: 'P', value: meal.nutrient_totals_mid.protein_g, unit: 'g', color: 'text-sage-600' },
+                                        { label: 'C', value: meal.nutrient_totals_mid.carbohydrate_g ?? meal.nutrient_totals_mid.carbs_g, unit: 'g', color: 'text-amber-600' },
+                                        { label: 'F', value: meal.nutrient_totals_mid.fat_g, unit: 'g', color: 'text-terracotta-500' },
+                                      ].map(({ label, value, unit, color }) => value != null && (
+                                        <span key={label} className={`text-xs font-semibold ${color} bg-cream-50 px-2 py-1 rounded-lg`}>
+                                          {label} {Math.round(value)}{unit}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+
+                                  {/* Delete button */}
+                                  <button
+                                    onClick={() => deleteMeal(meal)}
+                                    disabled={deletingId === meal.id}
+                                    className="mt-3 flex items-center gap-1.5 text-xs text-red-400 hover:text-red-600 font-semibold disabled:opacity-40 transition-colors active:scale-95"
+                                  >
+                                    {deletingId === meal.id ? (
+                                      <div className="w-3.5 h-3.5 border border-red-400 border-t-transparent rounded-full animate-spin" />
+                                    ) : (
+                                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                        <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>
+                                      </svg>
+                                    )}
+                                    {deletingId === meal.id ? 'Deleting…' : 'Delete this meal'}
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
