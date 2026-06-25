@@ -307,6 +307,136 @@ function InsightCard({ insight }: { insight: GeneratedInsight }) {
   )
 }
 
+// ─── Correlation patterns ────────────────────────────────────────────────────
+
+type CorrelationPattern = {
+  id: string
+  emoji: string
+  headline: string
+  detail: string
+  direction: 'positive' | 'negative' | 'neutral'
+}
+
+/**
+ * Cross-reference 14-day biofeedback scores with daily nutrition data.
+ * Only surface patterns where ≥ 3 matched days exist and the score
+ * difference between the top/bottom half is ≥ 0.6 on a 1-5 scale.
+ */
+function computeCorrelationPatterns(
+  nutritionDays: Array<{ date: string; nutrient_totals: Record<string, number> }>,
+  bioDays: Array<{ date: string; energy?: number; mood?: number; sleep_quality?: number; recovery?: number; digestion?: number }>,
+  energyMin: number,
+): CorrelationPattern[] {
+  // Join by date
+  const joined = nutritionDays
+    .map(n => ({ ...n, bio: bioDays.find(b => b.date === n.date) }))
+    .filter(d => d.bio)
+
+  if (joined.length < 3) return []
+
+  const patterns: CorrelationPattern[] = []
+
+  function splitCorrelation(
+    getValue: (d: typeof joined[0]) => number,
+    getScore: (d: typeof joined[0]) => number | undefined,
+    id: string,
+    emoji: string,
+    highLabel: string,
+    lowLabel: string,
+    highHeadline: string,
+    lowHeadline: string,
+    highDetail: string,
+    lowDetail: string,
+  ) {
+    const valid = joined.filter(d => getValue(d) > 0 && getScore(d) != null && getScore(d)! > 0)
+    if (valid.length < 3) return
+
+    const sorted = [...valid].sort((a, b) => getValue(a) - getValue(b))
+    const mid = Math.floor(sorted.length / 2)
+    const bottom = sorted.slice(0, mid)
+    const top = sorted.slice(mid)
+
+    const avgBottom = bottom.reduce((s, d) => s + getScore(d)!, 0) / bottom.length
+    const avgTop    = top.reduce((s, d) => s + getScore(d)!, 0)    / top.length
+    const diff = avgTop - avgBottom
+
+    if (Math.abs(diff) < 0.6) return
+
+    if (diff > 0) {
+      patterns.push({ id, emoji, headline: highHeadline, detail: highDetail, direction: 'positive' })
+    } else {
+      patterns.push({ id, emoji, headline: lowHeadline, detail: lowDetail, direction: 'negative' })
+    }
+  }
+
+  // Energy intake vs energy score
+  splitCorrelation(
+    d => d.nutrient_totals.energy_kcal ?? 0,
+    d => d.bio?.energy,
+    'energy_vs_fuel',
+    '⚡',
+    'High fuel', 'Low fuel',
+    'You feel more energised on well-fuelled days',
+    'Low energy often follows low-intake days',
+    `On days you ate closer to your target your energy score averaged higher. Consistent fuelling is making a difference.`,
+    `Your energy scores dip on days with lower food intake. Your body is telling you it needs more fuel.`,
+  )
+
+  // Protein vs recovery
+  splitCorrelation(
+    d => d.nutrient_totals.protein_g ?? 0,
+    d => d.bio?.recovery,
+    'protein_vs_recovery',
+    '💪',
+    'High protein', 'Low protein',
+    'Higher protein days link to better recovery',
+    'Recovery dips on low-protein days',
+    `Your recovery scores are higher on days with more protein. Aim for protein at every meal to support muscle repair.`,
+    `Recovery scores are lower on days with less protein. Try adding a protein source to each meal.`,
+  )
+
+  // Fibre vs digestion
+  splitCorrelation(
+    d => d.nutrient_totals.fiber_g ?? 0,
+    d => d.bio?.digestion,
+    'fiber_vs_digestion',
+    '🌿',
+    'High fibre', 'Low fibre',
+    'More fibre = better digestion for you',
+    'Digestion scores dip on low-fibre days',
+    `Your digestion is noticeably better on higher-fibre days. Vegetables, legumes, and wholegrains seem to be working for your gut.`,
+    `Digestion scores are lower on low-fibre days. Even small additions — a handful of veg or some seeds — can help.`,
+  )
+
+  // Energy intake vs mood
+  splitCorrelation(
+    d => d.nutrient_totals.energy_kcal ?? 0,
+    d => d.bio?.mood,
+    'energy_vs_mood',
+    '🧠',
+    'High intake', 'Low intake',
+    'Your mood lifts on better-fuelled days',
+    'Mood tends to dip when intake is low',
+    `There's a pattern between your food intake and mood. On days you ate more, your mood scores were higher — underfuelling affects more than just physical energy.`,
+    `Mood scores are lower on days with less food. Underfuelling can affect neurotransmitter production and emotional regulation.`,
+  )
+
+  // Energy intake vs sleep
+  splitCorrelation(
+    d => d.nutrient_totals.energy_kcal ?? 0,
+    d => d.bio?.sleep_quality,
+    'energy_vs_sleep',
+    '🌙',
+    'High intake', 'Low intake',
+    'Sleep quality is better on well-fuelled days',
+    'Sleep dips on lower-intake days',
+    `Your sleep quality scores are higher on better-fuelled days. Adequate carbohydrate and overall calorie intake supports serotonin and melatonin production.`,
+    `Sleep quality is lower on days with lower food intake. Going to bed under-fuelled can disrupt sleep architecture.`,
+  )
+
+  return patterns.slice(0, 4) // max 4 patterns to avoid overwhelming
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function InsightsPage() {
@@ -325,6 +455,7 @@ export default function InsightsPage() {
   const [insights7, setInsights7] = useState<GeneratedInsight[]>([])
   const [noData, setNoData] = useState(false)
   const [view, setView] = useState<'today' | '7day'>('today')
+  const [patterns, setPatterns] = useState<CorrelationPattern[]>([])
 
   useEffect(() => {
     async function load() {
@@ -377,19 +508,28 @@ export default function InsightsPage() {
       const nut = (log?.nutrient_totals as Record<string, number>) ?? {}
       setNutrients(nut)
 
-      // Fetch last 7 days of daily logs for average
+      // Fetch last 14 days for both nutrition and biofeedback (more data = better patterns)
+      const fourteenDaysAgo = new Date()
+      fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 13)
+      const fourteenDaysAgoStr = fourteenDaysAgo.toISOString().slice(0, 10)
+
       const sevenDaysAgo = new Date()
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6)
       const sevenDaysAgoStr = sevenDaysAgo.toISOString().slice(0, 10)
 
-      const { data: weekLogs } = await supabase
-        .from('daily_logs')
-        .select('nutrient_totals, date')
-        .eq('user_id', user.id)
-        .gte('date', sevenDaysAgoStr)
-        .lte('date', today)
+      const [weekLogsRes, bioLogsRes] = await Promise.all([
+        supabase.from('daily_logs').select('nutrient_totals, date')
+          .eq('user_id', user.id).gte('date', fourteenDaysAgoStr).lte('date', today),
+        supabase.from('biofeedback_logs').select('date, energy, mood, sleep_quality, recovery, digestion')
+          .eq('user_id', user.id).gte('date', fourteenDaysAgoStr).lte('date', today),
+      ])
 
-      if (weekLogs && weekLogs.length > 0) {
+      const allNutritionDays = weekLogsRes.data ?? []
+      const allBioDays       = bioLogsRes.data ?? []
+
+      // 7-day average (last 7 only)
+      const weekLogs = allNutritionDays.filter(d => d.date >= sevenDaysAgoStr)
+      if (weekLogs.length > 0) {
         const daysLogged = weekLogs.length
         const avgNut: Record<string, number> = {}
         for (const day of weekLogs) {
@@ -405,6 +545,16 @@ export default function InsightsPage() {
         setAvg7DaysLogged(daysLogged)
         const sex = prof.sex ?? 'female'
         setInsights7(generateInsights(avgNut, target, low, names, sex))
+      }
+
+      // Correlation patterns from 14 days of matched data
+      if (allNutritionDays.length >= 3 && allBioDays.length >= 3) {
+        const computed = computeCorrelationPatterns(
+          allNutritionDays.map(d => ({ date: d.date, nutrient_totals: (d.nutrient_totals as Record<string, number>) ?? {} })),
+          allBioDays,
+          low,
+        )
+        setPatterns(computed)
       }
 
       if (!log && names.length === 0) {
@@ -458,7 +608,7 @@ export default function InsightsPage() {
             <p className="text-[11px] font-medium text-gray-400 tracking-wide mb-0.5">
               {new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}
             </p>
-            <h1 className="text-2xl font-bold text-gray-900">Insights</h1>
+            <h1 className="text-2xl font-bold text-gray-900">Nudge</h1>
           </div>
         </div>
 
@@ -538,6 +688,43 @@ export default function InsightsPage() {
             {wins.map(insight => (
               <InsightCard key={insight.id} insight={insight} />
             ))}
+
+            {/* Correlation Patterns — only show when we have enough data */}
+            {patterns.length > 0 && (
+              <div className="mt-4 mb-4 fade-up">
+                <div className="flex items-center gap-2 mb-2 px-1">
+                  <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Your patterns</p>
+                  <span className="text-[10px] bg-sage-50 text-sage-600 font-semibold px-2 py-0.5 rounded-full">
+                    based on {avg7DaysLogged}+ days
+                  </span>
+                </div>
+                <div className="space-y-2.5">
+                  {patterns.map(p => (
+                    <div key={p.id} className="card p-4">
+                      <div className="flex items-start gap-3">
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 text-lg ${
+                          p.direction === 'positive' ? 'bg-sage-50' :
+                          p.direction === 'negative' ? 'bg-terracotta-50' : 'bg-cream-100'
+                        }`}>
+                          {p.emoji}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <p className="text-sm font-bold text-gray-800">{p.headline}</p>
+                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                              p.direction === 'positive' ? 'bg-sage-100 text-sage-700' : 'bg-terracotta-100 text-terracotta-700'
+                            }`}>
+                              {p.direction === 'positive' ? 'PATTERN' : 'WATCH'}
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-500 leading-relaxed">{p.detail}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Macros + energy */}
             <div className="card p-5 mt-4 fade-up" style={{ animationDelay: '0.15s' }}>
