@@ -229,7 +229,7 @@ export async function lookupFoodNutrients(params: {
     const brandedCandidates = await searchBrandedFood(name)
     for (const candidate of brandedCandidates) {
       const per100g = await getFoodNutrients(candidate.fdcId)
-      if (Object.keys(per100g).length < 3) continue
+      if (!per100g.energy_kcal || per100g.energy_kcal === 0) continue
       const mid = (portion_g_min + portion_g_max) / 2
       console.log(`✓ Branded USDA match for "${name}": ${candidate.description} (${candidate.fdcId})`)
       return {
@@ -249,7 +249,8 @@ export async function lookupFoodNutrients(params: {
 
   for (const candidate of candidates) {
     const per100g = await getFoodNutrients(candidate.fdcId)
-    if (Object.keys(per100g).length === 0) continue
+    // Must have energy_kcal specifically — a record without it is useless
+    if (!per100g.energy_kcal || per100g.energy_kcal === 0) continue
 
     const mid = (portion_g_min + portion_g_max) / 2
     return {

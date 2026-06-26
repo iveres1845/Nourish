@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { localDate } from '@/lib/utils/date'
 
 const SYMPTOMS = [
   'Cramps', 'Bloating', 'Fatigue', 'Headache', 'Mood swings',
@@ -38,7 +39,7 @@ export default function CyclePage() {
   const [flow,              setFlow]             = useState('')
   const [symNotes,          setSymNotes]         = useState('')
 
-  const today = new Date().toISOString().split('T')[0]
+  const today = localDate()
 
   useEffect(() => { load() }, [])
 

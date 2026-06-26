@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { checkBottomHugging } from '@/lib/engine/ea-calculator'
+import { localDate } from '@/lib/utils/date'
 import type { UserProfile } from '@/lib/types'
 
 // ─── DRI reference table ──────────────────────────────────────────────────────
@@ -480,7 +481,7 @@ export default function InsightsPage() {
       setEnergyLow(low)
 
       // Load today's daily log
-      const today = new Date().toISOString().slice(0, 10)
+      const today = localDate()
       const { data: log } = await supabase
         .from('daily_logs')
         .select('nutrient_totals')
@@ -511,13 +512,8 @@ export default function InsightsPage() {
       setNutrients(nut)
 
       // Fetch last 14 days for both nutrition and biofeedback (more data = better patterns)
-      const fourteenDaysAgo = new Date()
-      fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 13)
-      const fourteenDaysAgoStr = fourteenDaysAgo.toISOString().slice(0, 10)
-
-      const sevenDaysAgo = new Date()
-      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6)
-      const sevenDaysAgoStr = sevenDaysAgo.toISOString().slice(0, 10)
+      const fourteenDaysAgoStr = localDate(-13)
+      const sevenDaysAgoStr    = localDate(-6)
 
       const [weekLogsRes, bioLogsRes] = await Promise.all([
         supabase.from('daily_logs').select('nutrient_totals, date')

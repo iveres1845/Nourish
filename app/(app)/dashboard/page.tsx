@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import Link from 'next/link'
+import { localDate } from '@/lib/utils/date'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface MealRow { id: string; meal_type: string; photo_url?: string; meal_date: string; nutrient_totals_mid?: any }
@@ -111,8 +112,8 @@ export default function DashboardPage() {
   const [cycleLog,    setCycleLog]    = useState<any>(null)
   const [loading,     setLoading]     = useState(true)
 
-  const today       = new Date().toISOString().split('T')[0]
-  const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0]
+  const today        = localDate()
+  const sevenDaysAgo = localDate(-7)
 
   useEffect(() => { load() }, [])
 
@@ -177,7 +178,7 @@ export default function DashboardPage() {
 
   function buildTrend(key: string) {
     return Array.from({ length: 7 }, (_, i) => {
-      const d = new Date(Date.now() - (6 - i) * 86400000).toISOString().split('T')[0]
+      const d = localDate(i - 6)
       const found = biofeedback.find(b => b.date === d)
       return { date: d, value: found?.[key] ?? 0 }
     })

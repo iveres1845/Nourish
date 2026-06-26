@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { localDate } from '@/lib/utils/date'
 
 const MARKERS = [
   {
@@ -84,7 +85,7 @@ export default function NoticePage() {
   const [saved, setSaved] = useState(false)
   const [alreadyLogged, setAlreadyLogged] = useState(false)
 
-  const today = new Date().toISOString().split('T')[0]
+  const today = localDate()
   const dateLabel = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })
 
   useEffect(() => {

@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { localDate } from '@/lib/utils/date'
 
 // ── Client-side image compression ────────────────────────────────────────────
 async function compressImage(file: File, maxPx = 1400, quality = 0.85): Promise<File> {
@@ -90,6 +91,10 @@ export default function LogPage() {
   const [textMode, setTextMode] = useState(false)
   const [description, setDescription] = useState('')
 
+  // Portion editing
+  const [editingIndex, setEditingIndex] = useState<number | null>(null)
+  const [editGrams, setEditGrams] = useState('')
+
   // History
   const [history, setHistory] = useState<SavedMeal[]>([])
   const [historyLoading, setHistoryLoading] = useState(true)
@@ -103,7 +108,7 @@ export default function LogPage() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
 
-    const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0]
+    const sevenDaysAgo = localDate(-7)
     const { data } = await supabase
       .from('meals')
       .select('id, meal_type, meal_date, photo_url, nutrient_totals_mid')
@@ -227,8 +232,34 @@ export default function LogPage() {
     setFoods(prev => prev.filter((_, i) => i !== index))
   }
 
+  function startEdit(index: number) {
+    setEditingIndex(index)
+    setEditGrams(String(Math.round(foods[index].portion_g_mid)))
+  }
+
+  function applyPortionEdit(index: number) {
+    const newG = parseFloat(editGrams)
+    if (isNaN(newG) || newG <= 0) { setEditingIndex(null); return }
+    setFoods(prev => prev.map((food, i) => {
+      if (i !== index) return food
+      const scale = newG / (food.portion_g_mid || 1)
+      const scaleN = (n: Record<string, number>) =>
+        Object.fromEntries(Object.entries(n).map(([k, v]) => [k, Math.round(v * scale * 100) / 100]))
+      return {
+        ...food,
+        portion_g_mid: Math.round(newG),
+        portion_g_min: Math.round(newG * 0.9),
+        portion_g_max: Math.round(newG * 1.1),
+        nutrients_mid: scaleN(food.nutrients_mid),
+        nutrients_min: scaleN(food.nutrients_min),
+        nutrients_max: scaleN(food.nutrients_max),
+      }
+    }))
+    setEditingIndex(null)
+  }
+
   async function handleSave() {
-    if (!imageFile || foods.length === 0) return
+    if ((!imageFile && !textMode) || foods.length === 0) return
     setStage('saving')
 
     try {
@@ -267,7 +298,7 @@ export default function LogPage() {
         }
       }
 
-      const today = new Date().toISOString().split('T')[0]
+      const today = localDate()
 
       const { data: meal, error: mealError } = await supabase
         .from('meals')
@@ -340,7 +371,7 @@ export default function LogPage() {
   }
 
   // ── Group history by date ─────────────────────────────────────────────────
-  const today = new Date().toISOString().split('T')[0]
+  const today = localDate()
   const grouped: Record<string, SavedMeal[]> = {}
   for (const m of history) {
     if (!grouped[m.meal_date]) grouped[m.meal_date] = []
@@ -350,7 +381,7 @@ export default function LogPage() {
 
   function dateLabel(d: string) {
     if (d === today) return 'Today'
-    const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0]
+    const yesterday = localDate(-1)
     if (d === yesterday) return 'Yesterday'
     return new Date(d).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' })
   }
@@ -445,33 +476,75 @@ export default function LogPage() {
           </p>
           <div className="space-y-2">
             {foods.map((food, i) => (
-              <div key={i} className="card px-4 py-3.5 flex items-center gap-3">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="text-sm font-semibold text-gray-800 capitalize">{food.name}</p>
-                    {food.is_synthetic_oil && (
-                      <span className="text-[10px] bg-cream-100 text-gray-500 px-1.5 py-0.5 rounded-full">est.</span>
-                    )}
+              <div key={i} className="card px-4 py-3.5">
+                {editingIndex === i ? (
+                  // ── Inline edit form ──────────────────────────────────────
+                  <div>
+                    <p className="text-sm font-semibold text-gray-800 capitalize mb-2">{food.name}</p>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 relative">
+                        <input
+                          type="number"
+                          value={editGrams}
+                          onChange={e => setEditGrams(e.target.value)}
+                          onKeyDown={e => e.key === 'Enter' && applyPortionEdit(i)}
+                          className="w-full border border-sage-300 rounded-xl px-3 py-2 text-sm font-medium text-gray-800 focus:outline-none focus:ring-2 focus:ring-sage-400 pr-8"
+                          autoFocus
+                          min="1"
+                          max="2000"
+                        />
+                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">g</span>
+                      </div>
+                      <button
+                        onClick={() => applyPortionEdit(i)}
+                        className="bg-sage-600 text-white text-xs font-semibold px-4 py-2 rounded-xl active:scale-95 transition-all">
+                        Done
+                      </button>
+                      <button
+                        onClick={() => setEditingIndex(null)}
+                        className="text-gray-400 text-xs px-2 py-2">
+                        Cancel
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-gray-400 mt-1.5">Nutrients will scale proportionally to the new weight</p>
                   </div>
-                  <p className="text-xs text-gray-400 mt-0.5">
-                    ~{Math.round(food.portion_g_mid)}g
-                    {food.prep_method && food.prep_method !== 'unknown' && ` · ${food.prep_method}`}
-                    {' · '}<span className="font-medium text-gray-600">{Math.round(food.nutrients_mid?.energy_kcal ?? 0)} kcal</span>
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <span className={`text-[10px] font-semibold px-2 py-1 rounded-full ${
-                    food.confidence >= 0.8 ? 'bg-sage-50 text-sage-700' :
-                    food.confidence >= 0.5 ? 'bg-amber-50 text-amber-700' :
-                    'bg-gray-50 text-gray-500'
-                  }`}>
-                    {Math.round(food.confidence * 100)}%
-                  </span>
-                  <button onClick={() => removeFood(i)}
-                    className="w-7 h-7 rounded-full hover:bg-red-50 flex items-center justify-center text-gray-300 hover:text-red-400 transition-colors text-lg leading-none">
-                    ×
-                  </button>
-                </div>
+                ) : (
+                  // ── Normal display ────────────────────────────────────────
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-sm font-semibold text-gray-800 capitalize">{food.name}</p>
+                        {food.is_synthetic_oil && (
+                          <span className="text-[10px] bg-cream-100 text-gray-500 px-1.5 py-0.5 rounded-full">est.</span>
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        ~{Math.round(food.portion_g_mid)}g
+                        {food.prep_method && food.prep_method !== 'unknown' && ` · ${food.prep_method}`}
+                        {' · '}<span className="font-medium text-gray-600">{Math.round(food.nutrients_mid?.energy_kcal ?? 0)} kcal</span>
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <span className={`text-[10px] font-semibold px-2 py-1 rounded-full ${
+                        food.confidence >= 0.8 ? 'bg-sage-50 text-sage-700' :
+                        food.confidence >= 0.5 ? 'bg-amber-50 text-amber-700' :
+                        'bg-gray-50 text-gray-500'
+                      }`}>
+                        {Math.round(food.confidence * 100)}%
+                      </span>
+                      <button onClick={() => startEdit(i)}
+                        className="w-7 h-7 rounded-full hover:bg-sage-50 flex items-center justify-center text-gray-300 hover:text-sage-500 transition-colors">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                        </svg>
+                      </button>
+                      <button onClick={() => removeFood(i)}
+                        className="w-7 h-7 rounded-full hover:bg-red-50 flex items-center justify-center text-gray-300 hover:text-red-400 transition-colors text-lg leading-none">
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
