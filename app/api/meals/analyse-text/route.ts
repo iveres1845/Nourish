@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { lookupFoodNutrients, scaleNutrients, applyPrepAdjustments } from '@/lib/ai/nutrition'
-import { estimateFoodNutrientsPer100g } from '@/lib/ai/vision'
+import { estimateFoodNutrientsPer100g, validateNutritionEstimates } from '@/lib/ai/vision'
 import OpenAI from 'openai'
 
 const openai = new OpenAI({
@@ -62,9 +62,10 @@ Return this exact JSON structure:
 }
 
 Portion estimation rules:
-- "a cup of rice" = ~180–200g cooked
-- "half plate of salad" = ~120–180g vegetables
-- "quarter plate of chicken thighs" = ~120–160g cooked
+- Liquids: 1 cup = ~240ml ≈ 240g. So "2 cups milk" = ~480g, "1 cup juice" = ~240g
+- "a cup of cooked rice/pasta/grains" = ~180–200g cooked
+- "half plate of salad/vegetables" = ~120–180g
+- "quarter plate of meat/fish" = ~120–160g cooked
 - 1 tablespoon of oil/dressing = ~13–15g
 - Aim for accuracy — the midpoint should be your honest best estimate, not skewed in either direction
 - If oil/dressing is mentioned, include it in the oil fields
@@ -147,13 +148,28 @@ BRAND NAMES — critical for accuracy:
       }
     }
 
+    // Validate estimates — catch obvious errors before showing to user
+    const scales = await validateNutritionEstimates(enrichedFoods)
+    const validatedFoods = enrichedFoods.map((food, i) => {
+      const s = scales[i]
+      if (s === 1.0) return food
+      const applyScale = (n: Record<string, number>) =>
+        Object.fromEntries(Object.entries(n).map(([k, v]) => [k, Math.round(v * s * 100) / 100]))
+      return {
+        ...food,
+        nutrients_mid: applyScale(food.nutrients_mid),
+        nutrients_min: applyScale(food.nutrients_min),
+        nutrients_max: applyScale(food.nutrients_max),
+      }
+    })
+
     return NextResponse.json({
       vision: {
         meal_type: parsed.meal_type ?? mealTypeHint,
         overall_confidence: parsed.overall_confidence ?? 0.65,
         meal_description: parsed.meal_description ?? description,
       },
-      enriched_foods: enrichedFoods,
+      enriched_foods: validatedFoods,
       oil_item: oilItem,
       enriched_mixed_dishes: [],
       text_mode: true,

@@ -138,13 +138,24 @@ export async function getFoodNutrients(fdcId: number): Promise<Record<string, nu
     for (const [key, nutrientId] of Object.entries(NUTRIENT_ID_MAP)) {
       // FDC Foundation/SR Legacy: { nutrient: { id }, amount }
       // FDC Branded: { nutrientId, value }
+      // Energy can appear under ID 1008 (Atwater general) OR 2047 (Atwater specific)
+      const altEnergyId = key === 'energy_kcal' ? 2047 : null
+
       const nutrient = data.foodNutrients.find((n) =>
-        (n.nutrient?.id === nutrientId) || (n.nutrientId === nutrientId)
+        (n.nutrient?.id === nutrientId) || (n.nutrientId === nutrientId) ||
+        (altEnergyId !== null && ((n.nutrient?.id === altEnergyId) || (n.nutrientId === altEnergyId)))
       )
       if (nutrient) {
         const val = nutrient.amount ?? nutrient.value
         if (val !== undefined) result[key] = val  // per 100g
       }
+    }
+
+    // Sanity check: energy > 9 kcal/g is physically impossible (pure fat = ~9 kcal/g)
+    // If we see this, the record is likely reporting per-serving not per-100g — discard it
+    if (result.energy_kcal && result.energy_kcal > 900) {
+      console.warn(`FDC fdcId ${fdcId} returned suspicious energy ${result.energy_kcal} kcal/100g — discarding`)
+      return {}
     }
 
     return result  // per 100g

@@ -212,8 +212,15 @@ export async function estimateFoodNutrientsPer100g(foodName: string): Promise<Re
       response_format: { type: 'json_object' },
       messages: [{
         role: 'user',
-        content: `Give me the typical nutritional content per 100g of "${foodName}".
-Return ONLY a JSON object with numeric values (no units, no ranges):
+        content: `Give me the nutritional content of "${foodName}" per 100 GRAMS (not per serving, not per cup, not per piece — strictly per 100g of the food as consumed).
+
+Reference checks:
+- Whole milk per 100g ≈ 61 kcal, 3.3g protein, 3.5g fat
+- Cooked white rice per 100g ≈ 130 kcal, 2.7g protein, 0.3g fat
+- Chicken breast cooked per 100g ≈ 165 kcal, 31g protein, 3.6g fat
+- Olive oil per 100g ≈ 884 kcal, 0g protein, 100g fat
+
+Return ONLY a JSON object with numeric values — all per 100g:
 {
   "energy_kcal": 0,
   "protein_g": 0,
@@ -232,7 +239,7 @@ Return ONLY a JSON object with numeric values (no units, no ranges):
   "folate_mcg": 0,
   "saturated_fat_g": 0
 }
-Use typical/average values. JSON only.`,
+JSON only. energy_kcal must be ≤ 900 (nothing edible exceeds 900 kcal/100g).`,
       }],
       max_tokens: 300,
     })
@@ -249,5 +256,93 @@ Use typical/average values. JSON only.`,
   } catch {
     console.warn(`GPT nutrition fallback failed for "${foodName}"`)
     return {}
+  }
+}
+
+/**
+ * Sanity-check all enriched food items in one GPT call.
+ * Returns a scale factor per food index (1.0 = no correction needed).
+ * Applied to ALL nutrients proportionally — if kcal is 5× too high, so is everything else.
+ *
+ * Only corrects obviously wrong values (>2× or <0.5× expected) to avoid over-correcting
+ * legitimate estimates. Silently skips if GPT fails — better a wrong estimate than an error.
+ */
+export async function validateNutritionEstimates(
+  foods: Array<{ name: string; portion_g_mid: number; nutrients_mid: Record<string, number> }>
+): Promise<number[]> {
+  // Default: no correction
+  const scales = foods.map(() => 1.0)
+  if (foods.length === 0) return scales
+
+  try {
+    const foodList = foods
+      .map((f, i) => {
+        const kcal = Math.round(f.nutrients_mid.energy_kcal ?? 0)
+        const kcalPer100g = f.portion_g_mid > 0 ? Math.round((kcal / f.portion_g_mid) * 100) : 0
+        return `${i + 1}. ${f.name} — ${Math.round(f.portion_g_mid)}g total → ${kcal} kcal (${kcalPer100g} kcal/100g)`
+      })
+      .join('\n')
+
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      temperature: 0,
+      response_format: { type: 'json_object' },
+      messages: [{
+        role: 'user',
+        content: `You are a nutrition fact-checker. Review these food estimates and flag any where the kcal/100g is obviously wrong. Only flag clear errors (>2× or <0.5× the expected value for that food type).
+
+Reference values (kcal per 100g as consumed):
+- Milk, juice, broth: 30–70
+- Vegetables (cooked): 15–80
+- Fruit: 40–80
+- Cooked grains/pasta/rice: 100–180
+- Legumes (cooked): 80–150
+- Bread/tortilla: 200–280
+- Meat/fish/poultry (cooked): 100–300
+- Eggs: 140–160
+- Cheese: 280–420
+- Yogurt: 50–120
+- Nuts/seeds: 500–650
+- Oils/butter: 700–900
+- Protein powder: 350–400
+- Potato/root veg (cooked): 70–130
+- Pasta/gnocchi (cooked): 130–160
+
+Foods to check:
+${foodList}
+
+Return JSON: { "corrections": [ { "index": 1, "expected_kcal_per_100g": 61, "reason": "whole milk is ~61 kcal/100g not 300" } ] }
+Only include foods that need correction. Empty array if all look fine.`,
+      }],
+      max_tokens: 400,
+    })
+
+    const raw = response.choices[0]?.message?.content
+    if (!raw) return scales
+    const parsed = JSON.parse(raw)
+
+    for (const correction of (parsed.corrections ?? [])) {
+      const idx = (correction.index ?? 0) - 1  // 1-based to 0-based
+      if (idx < 0 || idx >= foods.length) continue
+      const food = foods[idx]
+      const currentKcalPer100g = food.portion_g_mid > 0
+        ? (food.nutrients_mid.energy_kcal ?? 0) / food.portion_g_mid * 100
+        : 0
+      if (currentKcalPer100g === 0) continue
+      const expectedKcalPer100g = correction.expected_kcal_per_100g
+      if (!expectedKcalPer100g || expectedKcalPer100g <= 0) continue
+
+      const factor = expectedKcalPer100g / currentKcalPer100g
+      // Only apply if correction is significant (outside ±30% band) and not extreme
+      if (factor < 0.7 || factor > 1.4) {
+        scales[idx] = Math.min(Math.max(factor, 0.1), 10)  // clamp to sane range
+        console.log(`✓ Nutrition correction for "${food.name}": ×${factor.toFixed(2)} (${Math.round(currentKcalPer100g)} → ${expectedKcalPer100g} kcal/100g) — ${correction.reason}`)
+      }
+    }
+
+    return scales
+  } catch (err) {
+    console.warn('Nutrition validation failed — using uncorrected estimates:', err)
+    return scales
   }
 }

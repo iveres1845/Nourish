@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { analyseMealPhoto, estimateMixedDishNutrition, estimateFoodNutrientsPer100g } from '@/lib/ai/vision'
+import { analyseMealPhoto, estimateMixedDishNutrition, estimateFoodNutrientsPer100g, validateNutritionEstimates } from '@/lib/ai/vision'
 import { lookupFoodNutrients, scaleNutrients, applyPrepAdjustments } from '@/lib/ai/nutrition'
 
 /**
@@ -152,10 +152,25 @@ export async function POST(request: NextRequest) {
       })
     )
 
-    // 8. Return enriched result (not yet saved — user confirms first)
+    // 8. Validate nutrition estimates — catch obvious errors (e.g. 4000 kcal for 1lb meat)
+    const scales = await validateNutritionEstimates(enrichedFoods)
+    const validatedFoods = enrichedFoods.map((food, i) => {
+      const s = scales[i]
+      if (s === 1.0) return food
+      const applyScale = (n: Record<string, number>) =>
+        Object.fromEntries(Object.entries(n).map(([k, v]) => [k, Math.round(v * s * 100) / 100]))
+      return {
+        ...food,
+        nutrients_mid: applyScale(food.nutrients_mid),
+        nutrients_min: applyScale(food.nutrients_min),
+        nutrients_max: applyScale(food.nutrients_max),
+      }
+    })
+
+    // 9. Return enriched result (not yet saved — user confirms first)
     return NextResponse.json({
       vision: visionResult,
-      enriched_foods: enrichedFoods,
+      enriched_foods: validatedFoods,
       oil_item: oilItem,
       enriched_mixed_dishes: enrichedMixedDishes,
     })
