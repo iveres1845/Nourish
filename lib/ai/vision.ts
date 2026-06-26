@@ -198,3 +198,56 @@ JSON only. No explanation.`,
   if (!raw) throw new Error('Nutrition estimation returned empty response')
   return JSON.parse(raw)
 }
+
+/**
+ * GPT-4o-mini fallback: estimate per-100g nutrients for a single food when
+ * USDA lookup returns no usable data (e.g. gnocchi, niche foods, branded items
+ * not in FDC). Returns the same flat Record shape as getFoodNutrients().
+ */
+export async function estimateFoodNutrientsPer100g(foodName: string): Promise<Record<string, number>> {
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      temperature: 0.1,
+      response_format: { type: 'json_object' },
+      messages: [{
+        role: 'user',
+        content: `Give me the typical nutritional content per 100g of "${foodName}".
+Return ONLY a JSON object with numeric values (no units, no ranges):
+{
+  "energy_kcal": 0,
+  "protein_g": 0,
+  "fat_g": 0,
+  "carbohydrate_g": 0,
+  "fiber_g": 0,
+  "sugar_g": 0,
+  "calcium_mg": 0,
+  "iron_mg": 0,
+  "magnesium_mg": 0,
+  "potassium_mg": 0,
+  "sodium_mg": 0,
+  "zinc_mg": 0,
+  "vitamin_c_mg": 0,
+  "vitamin_a_mcg": 0,
+  "folate_mcg": 0,
+  "saturated_fat_g": 0
+}
+Use typical/average values. JSON only.`,
+      }],
+      max_tokens: 300,
+    })
+    const raw = response.choices[0]?.message?.content
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    // Ensure all values are numbers
+    const result: Record<string, number> = {}
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === 'number' && v >= 0) result[k] = v
+    }
+    console.log(`✓ GPT fallback nutrition for "${foodName}": ${result.energy_kcal} kcal/100g`)
+    return result
+  } catch {
+    console.warn(`GPT nutrition fallback failed for "${foodName}"`)
+    return {}
+  }
+}

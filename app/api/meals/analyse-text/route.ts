@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { lookupFoodNutrients } from '@/lib/ai/nutrition'
+import { lookupFoodNutrients, scaleNutrients, applyPrepAdjustments } from '@/lib/ai/nutrition'
+import { estimateFoodNutrientsPer100g } from '@/lib/ai/vision'
 import OpenAI from 'openai'
 
 const openai = new OpenAI({
@@ -89,15 +90,31 @@ BRAND NAMES — critical for accuracy:
     // Enrich each food with USDA nutrient data (same as photo route)
     const enrichedFoods = await Promise.all(
       (parsed.foods ?? []).map(async (food: any) => {
-        const nutrients = await lookupFoodNutrients({
+        const mid = (food.portion_g_min + food.portion_g_max) / 2
+        let nutrients = await lookupFoodNutrients({
           name: food.name,
           portion_g_min: food.portion_g_min,
           portion_g_max: food.portion_g_max,
           prep_method: food.prep_method,
         })
+
+        // GPT fallback when USDA has no usable data
+        if (!nutrients) {
+          const per100g = await estimateFoodNutrientsPer100g(food.name)
+          if (per100g.energy_kcal) {
+            nutrients = {
+              fdcId: null,
+              source: 'generic',
+              nutrients_min: applyPrepAdjustments(scaleNutrients(per100g, food.portion_g_min), food.prep_method),
+              nutrients_max: applyPrepAdjustments(scaleNutrients(per100g, food.portion_g_max), food.prep_method),
+              nutrients_mid: applyPrepAdjustments(scaleNutrients(per100g, mid), food.prep_method),
+            }
+          }
+        }
+
         return {
           ...food,
-          portion_g_mid: (food.portion_g_min + food.portion_g_max) / 2,
+          portion_g_mid: mid,
           fdc_id: nutrients?.fdcId ?? null,
           nutrients_min: nutrients?.nutrients_min ?? {},
           nutrients_max: nutrients?.nutrients_max ?? {},

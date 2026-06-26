@@ -91,6 +91,9 @@ export default function LogPage() {
   const [textMode, setTextMode] = useState(false)
   const [description, setDescription] = useState('')
 
+  // Date selection (default today, can log to past days)
+  const [mealDate, setMealDate] = useState(localDate())
+
   // Portion editing
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
   const [editGrams, setEditGrams] = useState('')
@@ -298,7 +301,7 @@ export default function LogPage() {
         }
       }
 
-      const today = localDate()
+      const today = mealDate  // may be a past date if user chose one
 
       const { data: meal, error: mealError } = await supabase
         .from('meals')
@@ -684,6 +687,38 @@ export default function LogPage() {
               </button>
             ))}
           </div>
+        </div>
+
+        {/* Date — defaults to today, can log to past days */}
+        <div className="card p-4">
+          <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-3">Date</p>
+          <div className="flex gap-2 mb-2">
+            {[
+              { label: 'Today',     date: localDate() },
+              { label: 'Yesterday', date: localDate(-1) },
+              { label: '2 days ago',date: localDate(-2) },
+            ].map(opt => (
+              <button key={opt.label} onClick={() => setMealDate(opt.date)}
+                className={`flex-1 py-2.5 rounded-xl text-xs font-semibold transition-all active:scale-95 ${
+                  mealDate === opt.date ? 'bg-sage-600 text-white shadow-sm shadow-sage-300/40' : 'bg-cream-50 text-gray-500 hover:bg-cream-100'
+                }`}>
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          {/* Custom date fallback */}
+          {![localDate(), localDate(-1), localDate(-2)].includes(mealDate) && (
+            <p className="text-xs text-sage-600 font-medium px-1">
+              {new Date(mealDate + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}
+            </p>
+          )}
+          <input
+            type="date"
+            value={mealDate}
+            max={localDate()}
+            onChange={e => e.target.value && setMealDate(e.target.value)}
+            className="mt-2 w-full text-xs text-gray-400 bg-transparent focus:outline-none cursor-pointer"
+          />
         </div>
 
         {error && <p className="text-sm text-red-500 bg-red-50 rounded-xl px-4 py-3">{error}</p>}
