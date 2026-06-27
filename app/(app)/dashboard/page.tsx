@@ -11,7 +11,7 @@ interface MealRow { id: string; meal_type: string; photo_url?: string; meal_date
 interface NutrientTotals { energy_kcal: number; protein_g: number; carbs_g: number; fat_g: number; fiber_g: number }
 
 // ── Nourishment Score helpers ─────────────────────────────────────────────────
-function calcNourishmentScore(nutrients: NutrientTotals, energyMin: number, meals: MealLog[]) {
+function calcNourishmentScore(nutrients: NutrientTotals, energyMin: number, meals: MealRow[]) {
   const fuelPct  = energyMin > 0 ? Math.min((nutrients.energy_kcal / energyMin) * 100, 100) : 0
   const proteinPct = Math.min((nutrients.protein_g / 85) * 100, 100)
   const fiberPct   = Math.min((nutrients.fiber_g   / 25) * 100, 100)
@@ -96,6 +96,20 @@ function MacroChip({ label, value, unit }: { label: string; value: number; unit:
     <div className="bg-cream-50 rounded-xl py-2 px-1 text-center">
       <p className="text-[10px] text-gray-400 font-medium">{label}</p>
       <p className="text-sm font-bold text-gray-700 mt-0.5">{value}<span className="text-[10px] font-normal ml-px">{unit}</span></p>
+    </div>
+  )
+}
+
+function QualMacroChip({ label, pct }: { label: string; pct: number }) {
+  const { text, color } =
+    pct >= 0.8  ? { text: 'on track',  color: 'text-sage-600' } :
+    pct >= 0.5  ? { text: 'building',  color: 'text-amber-500' } :
+    pct >= 0.25 ? { text: 'low',       color: 'text-terracotta-500' } :
+                  { text: 'very low',  color: 'text-terracotta-600' }
+  return (
+    <div className="bg-cream-50 rounded-xl py-2 px-1 text-center">
+      <p className="text-[10px] text-gray-400 font-medium">{label}</p>
+      <p className={`text-xs font-bold mt-0.5 ${color}`}>{text}</p>
     </div>
   )
 }
@@ -258,13 +272,30 @@ export default function DashboardPage() {
             </div>
           )}
           <div className="mt-3 grid grid-cols-3 gap-2">
-            <MacroChip label="Protein" value={Math.round(nutrients.protein_g)} unit="g" />
-            <MacroChip label="Carbs"   value={Math.round(nutrients.carbs_g)}   unit="g" />
-            <MacroChip label="Fat"     value={Math.round(nutrients.fat_g)}     unit="g" />
+            {showCalories ? (
+              <>
+                <MacroChip label="Protein" value={Math.round(nutrients.protein_g)} unit="g" />
+                <MacroChip label="Carbs"   value={Math.round(nutrients.carbs_g)}   unit="g" />
+                <MacroChip label="Fat"     value={Math.round(nutrients.fat_g)}     unit="g" />
+              </>
+            ) : (
+              <>
+                {/* Qualitative labels derived from energy-scaled macro targets */}
+                {(() => {
+                  const proteinTarget = energyLow > 0 ? energyLow * 0.22 / 4 : (isFemale ? 50 : 65)
+                  const carbTarget    = energyLow > 0 ? energyLow * 0.45 / 4 : 200
+                  const fatTarget     = energyLow > 0 ? energyLow * 0.33 / 9 : 60
+                  return (
+                    <>
+                      <QualMacroChip label="Protein" pct={nutrients.protein_g / proteinTarget} />
+                      <QualMacroChip label="Carbs"   pct={nutrients.carbs_g   / carbTarget} />
+                      <QualMacroChip label="Fats"    pct={nutrients.fat_g     / fatTarget} />
+                    </>
+                  )
+                })()}
+              </>
+            )}
           </div>
-          {!showCalories && (
-            <p className="text-[10px] text-gray-300 mt-2 text-center">numbers off · toggle in Profile</p>
-          )}
         </div>
 
         {/* Meals */}
@@ -287,9 +318,17 @@ export default function DashboardPage() {
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-semibold text-gray-800 truncate">{label}</p>
                       <p className="text-xs text-gray-400">
-                        {kcal ? `${Math.round(kcal)} kcal` : 'logged'}
+                        {showCalories && kcal ? `${Math.round(kcal)} kcal · ` : ''}<span className="text-gray-300">logged</span>
                       </p>
                     </div>
+                    <Link href={`/edit-meal/${m.id}`}
+                      className="flex-shrink-0 text-gray-300 hover:text-sage-500 transition-colors p-1"
+                      title="Edit meal">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                      </svg>
+                    </Link>
                   </div>
                 )
               })}

@@ -7,7 +7,7 @@ import { checkBottomHugging } from '@/lib/engine/ea-calculator'
 import { localDate } from '@/lib/utils/date'
 import type { UserProfile } from '@/lib/types'
 
-// ─── DRI reference table ──────────────────────────────────────────────────────
+// ─── DRI reference table (used for gap cards + pairing rules) ─────────────────
 
 const DRI: Record<string, { label: string; unit: string; female: number; male: number; emoji: string }> = {
   iron_mg:         { label: 'Iron',        unit: 'mg',  female: 18,   male: 8,    emoji: '🩸' },
@@ -26,6 +26,71 @@ const DRI: Record<string, { label: string; unit: string; female: number; male: n
   selenium_mcg:    { label: 'Selenium',    unit: 'mcg', female: 55,   male: 55,   emoji: '🔬' },
   choline_mg:      { label: 'Choline',     unit: 'mg',  female: 425,  male: 550,  emoji: '🥚' },
 }
+
+// ─── Full nutrient panel ──────────────────────────────────────────────────────
+// All nutrients from NUTRIENT_ID_MAP, grouped by category.
+// dri_f/dri_m = null means no DRI target — just show raw value.
+
+type NutEntry = { label: string; unit: string; emoji: string; dri_f: number | null; dri_m: number | null }
+type NutGroup = { group: string; items: Array<{ key: string } & NutEntry> }
+
+const ALL_NUTRIENT_GROUPS: NutGroup[] = [
+  {
+    group: 'Macros',
+    items: [
+      { key: 'protein_g',       label: 'Protein',         unit: 'g',   emoji: '💪', dri_f: 46,   dri_m: 56   },
+      { key: 'carbohydrate_g',  label: 'Carbohydrates',   unit: 'g',   emoji: '🌾', dri_f: null, dri_m: null },
+      { key: 'fat_g',           label: 'Total Fat',        unit: 'g',   emoji: '🥑', dri_f: null, dri_m: null },
+      { key: 'saturated_fat_g', label: 'Saturated Fat',   unit: 'g',   emoji: '🧈', dri_f: null, dri_m: null },
+      { key: 'fiber_g',         label: 'Fibre',            unit: 'g',   emoji: '🫘', dri_f: 25,   dri_m: 38   },
+      { key: 'sugar_g',         label: 'Sugar',            unit: 'g',   emoji: '🍬', dri_f: null, dri_m: null },
+    ],
+  },
+  {
+    group: 'Fat-Soluble Vitamins',
+    items: [
+      { key: 'vitamin_a_mcg',  label: 'Vitamin A',  unit: 'mcg', emoji: '👁️', dri_f: 700, dri_m: 900  },
+      { key: 'vitamin_d_mcg',  label: 'Vitamin D',  unit: 'mcg', emoji: '☀️', dri_f: 15,  dri_m: 15   },
+      { key: 'vitamin_e_mg',   label: 'Vitamin E',  unit: 'mg',  emoji: '🛡️', dri_f: 15,  dri_m: 15   },
+      { key: 'vitamin_k_mcg',  label: 'Vitamin K',  unit: 'mcg', emoji: '🥬', dri_f: 90,  dri_m: 120  },
+    ],
+  },
+  {
+    group: 'B Vitamins & Vitamin C',
+    items: [
+      { key: 'vitamin_c_mg',    label: 'Vitamin C',    unit: 'mg',  emoji: '🍊', dri_f: 75,  dri_m: 90   },
+      { key: 'vitamin_b1_mg',   label: 'Thiamine (B1)',unit: 'mg',  emoji: '🌿', dri_f: 1.1, dri_m: 1.2  },
+      { key: 'vitamin_b2_mg',   label: 'Riboflavin (B2)',unit: 'mg', emoji: '🥛',dri_f: 1.1, dri_m: 1.3  },
+      { key: 'vitamin_b3_mg',   label: 'Niacin (B3)',  unit: 'mg',  emoji: '🫀', dri_f: 14,  dri_m: 16   },
+      { key: 'vitamin_b6_mg',   label: 'B6',           unit: 'mg',  emoji: '🧬', dri_f: 1.3, dri_m: 1.3  },
+      { key: 'vitamin_b12_mcg', label: 'B12',          unit: 'mcg', emoji: '🧠', dri_f: 2.4, dri_m: 2.4  },
+      { key: 'folate_mcg',      label: 'Folate',       unit: 'mcg', emoji: '🥦', dri_f: 400, dri_m: 400  },
+      { key: 'choline_mg',      label: 'Choline',      unit: 'mg',  emoji: '🥚', dri_f: 425, dri_m: 550  },
+    ],
+  },
+  {
+    group: 'Minerals',
+    items: [
+      { key: 'calcium_mg',    label: 'Calcium',    unit: 'mg',  emoji: '🦴', dri_f: 1000, dri_m: 1000 },
+      { key: 'iron_mg',       label: 'Iron',       unit: 'mg',  emoji: '🩸', dri_f: 18,   dri_m: 8    },
+      { key: 'magnesium_mg',  label: 'Magnesium',  unit: 'mg',  emoji: '⚡', dri_f: 310,  dri_m: 400  },
+      { key: 'phosphorus_mg', label: 'Phosphorus', unit: 'mg',  emoji: '🦷', dri_f: 700,  dri_m: 700  },
+      { key: 'potassium_mg',  label: 'Potassium',  unit: 'mg',  emoji: '🍌', dri_f: 2600, dri_m: 3400 },
+      { key: 'sodium_mg',     label: 'Sodium',     unit: 'mg',  emoji: '🧂', dri_f: null, dri_m: null },
+      { key: 'zinc_mg',       label: 'Zinc',       unit: 'mg',  emoji: '🛡️', dri_f: 8,    dri_m: 11   },
+      { key: 'copper_mg',     label: 'Copper',     unit: 'mg',  emoji: '🔩', dri_f: 0.9,  dri_m: 0.9  },
+      { key: 'selenium_mcg',  label: 'Selenium',   unit: 'mcg', emoji: '🔬', dri_f: 55,   dri_m: 55   },
+    ],
+  },
+  {
+    group: 'Omega-3 Fatty Acids',
+    items: [
+      { key: 'omega3_ala_g',  label: 'ALA (plant)',  unit: 'g',  emoji: '🌱', dri_f: 1.1, dri_m: 1.6 },
+      { key: 'omega3_epa_mg', label: 'EPA (marine)', unit: 'mg', emoji: '🐟', dri_f: null, dri_m: null },
+      { key: 'omega3_dha_mg', label: 'DHA (marine)', unit: 'mg', emoji: '🧠', dri_f: null, dri_m: null },
+    ],
+  },
+]
 
 // ─── Pairing rules ────────────────────────────────────────────────────────────
 
@@ -457,8 +522,9 @@ export default function InsightsPage() {
   const [insights7, setInsights7] = useState<GeneratedInsight[]>([])
   const [noData, setNoData] = useState(false)
   const [view, setView] = useState<'today' | '7day'>('today')
-  const [patterns, setPatterns] = useState<CorrelationPattern[]>([])
+  const [patterns,         setPatterns]         = useState<CorrelationPattern[]>([])
   const [bottomHugMessage, setBottomHugMessage] = useState<string | null>(null)
+  const [showAllNutrients, setShowAllNutrients] = useState(false)
 
   useEffect(() => {
     async function load() {
@@ -810,6 +876,77 @@ export default function InsightsPage() {
                 )}
               </div>
             </div>
+
+            {/* All nutrients panel */}
+            <div className="mt-4 fade-up">
+              <button
+                onClick={() => setShowAllNutrients(v => !v)}
+                className="w-full card px-4 py-3.5 flex items-center justify-between text-left active:scale-[0.99] transition-all"
+              >
+                <span className="text-sm font-semibold text-gray-700">All nutrients</span>
+                <span className={`text-gray-400 transition-transform ${showAllNutrients ? 'rotate-180' : ''}`}>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M6 9l6 6 6-6"/>
+                  </svg>
+                </span>
+              </button>
+
+              {showAllNutrients && (
+                <div className="card p-4 mt-1 space-y-5">
+                  {ALL_NUTRIENT_GROUPS.map(group => {
+                    // only show groups that have at least one non-zero value
+                    const hasData = group.items.some(item => (activeNutrients[item.key] ?? 0) > 0)
+                    if (!hasData) return null
+                    return (
+                      <div key={group.group}>
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2.5">{group.group}</p>
+                        <div className="space-y-2">
+                          {group.items.map(item => {
+                            const val = activeNutrients[item.key] ?? 0
+                            const dri = sex === 'female' ? item.dri_f : item.dri_m
+                            const pct = dri ? Math.min((val / dri) * 100, 200) : null
+                            const hasVal = val > 0
+
+                            // Format value nicely
+                            let displayVal = ''
+                            if (item.unit === 'g') displayVal = val >= 1 ? `${Math.round(val)}${item.unit}` : `${(val * 1000).toFixed(0)}mg`
+                            else if (item.unit === 'mg') displayVal = `${val < 1 ? val.toFixed(2) : Math.round(val)}${item.unit}`
+                            else displayVal = `${val < 1 ? val.toFixed(1) : Math.round(val)}${item.unit}`
+
+                            return (
+                              <div key={item.key} className={`flex items-center gap-2 py-1 ${!hasVal ? 'opacity-40' : ''}`}>
+                                <span className="w-5 text-sm text-center flex-shrink-0">{item.emoji}</span>
+                                <span className="text-xs text-gray-700 flex-1 min-w-0 truncate">{item.label}</span>
+                                <span className="text-xs font-semibold text-gray-800 flex-shrink-0 tabular-nums">
+                                  {hasVal ? displayVal : '—'}
+                                </span>
+                                {dri && hasVal && pct !== null && (
+                                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                                    <div className="w-14 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                                      <div
+                                        className={`h-full rounded-full ${
+                                          pct >= 90 ? 'bg-sage-500' : pct >= 50 ? 'bg-amber-400' : 'bg-terracotta-400'
+                                        }`}
+                                        style={{ width: `${Math.min(pct, 100)}%` }}
+                                      />
+                                    </div>
+                                    <span className={`text-[10px] font-medium w-7 text-right tabular-nums ${
+                                      pct >= 90 ? 'text-sage-600' : pct >= 50 ? 'text-amber-500' : 'text-terracotta-500'
+                                    }`}>{Math.round(pct)}%</span>
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )
+                  })}
+                  <p className="text-[10px] text-gray-300 text-center pt-1">% shown where daily targets (DRI) are available</p>
+                </div>
+              )}
+            </div>
+
           </>
         )}
       </div>

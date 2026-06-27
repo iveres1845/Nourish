@@ -107,15 +107,74 @@ export async function searchBrandedFood(query: string): Promise<Array<{ fdcId: n
 }
 
 /**
+ * Common food-world words that GPT may capitalise in sentence/title case
+ * but that do NOT indicate a brand name.
+ * Purpose: prevent "Whole Milk" or "Orange Juice" triggering branded USDA search.
+ */
+const GENERIC_FOOD_WORDS = new Set([
+  // dairy descriptors
+  'whole', 'skim', 'skimmed', 'reduced', 'lowfat', 'nonfat', 'fat', 'semi',
+  'milk', 'cream', 'butter', 'cheese', 'yogurt', 'yoghurt', 'kefir', 'whey',
+  // proteins
+  'chicken', 'beef', 'pork', 'lamb', 'turkey', 'duck', 'salmon', 'tuna',
+  'cod', 'tilapia', 'shrimp', 'prawn', 'egg', 'eggs', 'tofu', 'tempeh', 'seitan',
+  // grains & starches
+  'rice', 'oats', 'oatmeal', 'bread', 'pasta', 'noodles', 'quinoa', 'barley',
+  'rye', 'millet', 'corn', 'wheat', 'flour', 'tortilla', 'wrap', 'pita',
+  'white', 'brown', 'jasmine', 'basmati', 'sourdough', 'gnocchi',
+  // fruits
+  'apple', 'banana', 'orange', 'grape', 'strawberry', 'blueberry', 'mango',
+  'pear', 'peach', 'plum', 'cherry', 'kiwi', 'melon', 'watermelon',
+  'pineapple', 'papaya', 'lemon', 'lime', 'avocado', 'tomato',
+  // vegetables
+  'spinach', 'kale', 'broccoli', 'carrot', 'potato', 'onion', 'garlic',
+  'pepper', 'zucchini', 'cucumber', 'celery', 'lettuce', 'cabbage', 'beet',
+  'cauliflower', 'asparagus', 'eggplant', 'mushroom', 'peas', 'corn',
+  // legumes & nuts
+  'lentils', 'chickpeas', 'beans', 'peanut', 'almond', 'walnut', 'cashew',
+  'pistachio', 'pecan', 'sunflower', 'pumpkin', 'sesame', 'flaxseed', 'chia',
+  // beverages & liquids
+  'juice', 'water', 'broth', 'stock', 'oil', 'vinegar', 'tea', 'coffee',
+  'sauce', 'dressing', 'gravy', 'syrup', 'honey', 'jam', 'jelly',
+  // prep / cuisine descriptors
+  'cooked', 'raw', 'grilled', 'baked', 'roasted', 'steamed', 'boiled',
+  'fried', 'sauteed', 'stir', 'smoked', 'cured', 'pickled', 'dried',
+  'fresh', 'frozen', 'canned',
+  // size / type modifiers
+  'large', 'small', 'medium', 'lean', 'extra', 'ground', 'sliced', 'diced',
+  'chopped', 'minced', 'shredded', 'plain', 'original', 'classic', 'simple',
+  'organic', 'natural', 'wild', 'low', 'high', 'full', 'light', 'dark',
+  // cuisines / generics that sound proper-noun-ish
+  'greek', 'italian', 'mexican', 'japanese', 'chinese', 'thai', 'indian',
+  'french', 'american', 'mediterranean',
+  // meal types / misc
+  'salad', 'soup', 'stew', 'curry', 'mixed', 'blend', 'smoothie', 'shake',
+  'bar', 'snack', 'mix', 'protein',   // "protein" alone is generic
+])
+
+/**
  * Heuristic: does this food name look like it contains a brand?
- * Looks for capitalized multi-word names, known brand patterns.
+ * Returns true only when a capitalised word is NOT a common food/prep term.
+ *
+ * Examples:
+ *   "Whole Milk"              → false  (both words are generic)
+ *   "Mission Carb Balance"    → true   ("Mission" is not generic)
+ *   "Fairlife Core Power"     → true   ("Fairlife" is not generic)
+ *   "Greek Yogurt"            → false  (both generic)
+ *   "Chobani Greek Yogurt"    → true   ("Chobani" is not generic)
  */
 function looksLikeBrandedFood(name: string): boolean {
-  // Has multiple capitalised words (e.g. "Fairlife Core Power", "Mission Carb Balance")
-  const capitalWords = (name.match(/\b[A-Z][a-z]+/g) ?? []).length
-  if (capitalWords >= 2) return true
-  // Contains common brand signals
-  const brandSignals = /\b(protein shake|protein bar|tortilla wrap|greek yogurt brand|granola bar|energy drink|protein powder|sports drink|meal replacement|protein cookie)\b/i
+  const words = name.split(/\s+/)
+  const capitalizedWords = words.filter(w => /^[A-Z][a-z]/.test(w))
+
+  if (capitalizedWords.length >= 2) {
+    // If EVERY capitalised word is a generic food term, this is NOT a brand
+    const hasNonGenericWord = capitalizedWords.some(w => !GENERIC_FOOD_WORDS.has(w.toLowerCase()))
+    return hasNonGenericWord
+  }
+
+  // Single capitalised word — only flag with explicit brand product signals
+  const brandSignals = /\b(protein shake|protein bar|granola bar|energy drink|sports drink|meal replacement|protein cookie|core power|premier protein|muscle milk)\b/i
   return brandSignals.test(name)
 }
 
