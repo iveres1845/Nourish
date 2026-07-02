@@ -152,18 +152,27 @@ export async function POST(request: NextRequest) {
       })
     )
 
-    // 8. Validate nutrition estimates — catch obvious errors (e.g. 4000 kcal for 1lb meat)
-    const scales = await validateNutritionEstimates(enrichedFoods)
+    // 8. Validate nutrition estimates — catches both magnitude errors (e.g. 4000
+    // kcal for 1lb meat) AND composition errors (e.g. milk matched to a cheese
+    // record, or protein powder matched to a carb-heavy record) where the total
+    // kcal looks fine but the protein/fat/carb split doesn't make sense for the food.
+    const corrections = await validateNutritionEstimates(enrichedFoods)
     const validatedFoods = enrichedFoods.map((food, i) => {
-      const s = scales[i]
-      if (s === 1.0) return food
-      const applyScale = (n: Record<string, number>) =>
-        Object.fromEntries(Object.entries(n).map(([k, v]) => [k, Math.round(v * s * 100) / 100]))
+      const correction = corrections[i]
+      if (!correction) return food
+      const scaleTo = (grams: number) => ({
+        energy_kcal: Math.round(correction.energy_kcal * grams / 100 * 100) / 100,
+        protein_g: Math.round(correction.protein_g * grams / 100 * 100) / 100,
+        fat_g: Math.round(correction.fat_g * grams / 100 * 100) / 100,
+        carbohydrate_g: Math.round(correction.carbohydrate_g * grams / 100 * 100) / 100,
+      })
+      // Overwrite only the 4 core macro fields — preserve whatever micronutrient
+      // data (vitamins/minerals) the original USDA/GPT lookup already had.
       return {
         ...food,
-        nutrients_mid: applyScale(food.nutrients_mid),
-        nutrients_min: applyScale(food.nutrients_min),
-        nutrients_max: applyScale(food.nutrients_max),
+        nutrients_min: { ...food.nutrients_min, ...scaleTo(food.portion_g_min) },
+        nutrients_mid: { ...food.nutrients_mid, ...scaleTo(food.portion_g_mid) },
+        nutrients_max: { ...food.nutrients_max, ...scaleTo(food.portion_g_max) },
       }
     })
 
