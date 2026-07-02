@@ -75,11 +75,12 @@ Return this exact JSON structure:
 - When you see multiple pieces (4 waffles, 3 slices), the portion_g values should reflect the TOTAL for all pieces
 - Aim for accuracy. A slight overestimate is better than a significant underestimate.
 - Include everything visible, even low-confidence items
-- **Brand names** — if the user note identifies a specific brand or product, use the full brand + product name in the food item's name field. Examples:
-  - Note says "Fairlife protein shake" → name = "Fairlife Core Power protein shake"
+- **Brand names** — identify brands from BOTH sources: (1) any brand name, logo, or product packaging visibly readable in the photo itself — read carton labels, wrappers, bottles, cans, etc. the same way you'd read any other text in the image, and (2) the user note, if one is given. If either source identifies a specific brand or product, use the full brand + product name in the food item's name field. Examples:
+  - Photo shows a Fairlife carton (no note needed) → name = "Fairlife Core Power protein shake"
   - Note says "Mission Carb Balance tortillas" → name = "Mission Carb Balance flour tortilla"
   - Note says "Chobani Greek yogurt" → name = "Chobani plain Greek yogurt"
-  - This is critical — branded products have very different nutrition profiles than generics
+  - Photo shows an unbranded glass of milk, no note → name = "whole milk" (no brand to report — don't guess one)
+  - This is critical — branded products have very different nutrition profiles than generics. Only use a brand name when you actually see or are told one; never assume a specific brand for a generic-looking food.
 - Return only valid JSON, no explanation`
 
 /**

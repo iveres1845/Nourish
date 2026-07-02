@@ -4,6 +4,8 @@
  * Free API key: https://api.data.gov/signup/
  */
 
+import { searchOpenFoodFacts } from './openfoodfacts'
+
 const FDC_BASE = 'https://api.nal.usda.gov/fdc/v1'
 
 // ─── Nutrient ID map (USDA FDC nutrient IDs) ─────────────────────────────────
@@ -235,7 +237,7 @@ export async function getFoodNutrients(fdcId: number): Promise<Record<string, nu
  * falls through to the next candidate — or to the GPT fallback, which always
  * returns a complete profile.
  */
-function hasCompleteMacroProfile(per100g: Record<string, number>): boolean {
+export function hasCompleteMacroProfile(per100g: Record<string, number>): boolean {
   return (
     typeof per100g.protein_g === 'number' &&
     typeof per100g.fat_g === 'number' &&
@@ -390,7 +392,29 @@ export async function lookupFoodNutrients(params: {
         source: 'branded',
       }
     }
-    console.log(`No branded USDA match for "${name}" — falling back to generic`)
+    console.log(`No branded USDA match for "${name}" — trying Open Food Facts`)
+
+    // ── Step 1b: Open Food Facts — free, open branded/packaged database. ────
+    // Only reached because `name` already looked brand-specific AND USDA's
+    // own Branded Foods search came up empty; generic foods never reach this.
+    const offCandidates = await searchOpenFoodFacts(name)
+    for (const candidate of offCandidates) {
+      if (!candidate.per100g.energy_kcal || candidate.per100g.energy_kcal === 0) continue
+      if (!hasCompleteMacroProfile(candidate.per100g)) {
+        console.warn(`Incomplete macro profile for Open Food Facts "${name}" (${candidate.code}) — skipping candidate`)
+        continue
+      }
+      const mid = (portion_g_min + portion_g_max) / 2
+      console.log(`✓ Open Food Facts match for "${name}": ${candidate.description} (${candidate.code})`)
+      return {
+        fdcId: null,
+        nutrients_min: applyPrepAdjustments(scaleNutrients(candidate.per100g, portion_g_min), prep_method),
+        nutrients_max: applyPrepAdjustments(scaleNutrients(candidate.per100g, portion_g_max), prep_method),
+        nutrients_mid: applyPrepAdjustments(scaleNutrients(candidate.per100g, mid), prep_method),
+        source: 'branded',
+      }
+    }
+    console.log(`No Open Food Facts match for "${name}" either — falling back to generic`)
   }
 
   // ── Step 2: Generic USDA search (Foundation / SR Legacy) ──────────────────
