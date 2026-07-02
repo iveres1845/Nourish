@@ -262,26 +262,50 @@ JSON only. energy_kcal must be ≤ 900 (nothing edible exceeds 900 kcal/100g).`,
 }
 
 /**
- * Sanity-check all enriched food items in one GPT call.
- * Returns a scale factor per food index (1.0 = no correction needed).
- * Applied to ALL nutrients proportionally — if kcal is 5× too high, so is everything else.
+ * Corrected per-100g macro/energy values GPT proposes for a food whose
+ * USDA- or GPT-sourced estimate failed the plausibility check. `null` means
+ * the original estimate passed and needs no correction.
+ */
+export type MacroCorrection = {
+  energy_kcal: number
+  protein_g: number
+  fat_g: number
+  carbohydrate_g: number
+} | null
+
+/**
+ * Sanity-check all enriched food items in one GPT call, checking TWO
+ * independent things per food:
  *
- * Only corrects obviously wrong values (>2× or <0.5× expected) to avoid over-correcting
- * legitimate estimates. Silently skips if GPT fails — better a wrong estimate than an error.
+ *  1. Magnitude — is kcal/100g roughly right for this food type?
+ *  2. Composition — does the protein/fat/carbohydrate SPLIT make sense for
+ *     this specific food? This is the check that catches a food silently
+ *     matched to the wrong database record: e.g. "Whole Milk" resolving to
+ *     a mozzarella cheese record (protein=fat≈11g, carb≈1g instead of
+ *     milk's balanced ~8/8/12g split), or "Whey Protein" resolving to a
+ *     carb-heavy record instead of its expected ~70-90g protein/100g. Both
+ *     of those cases can still sum to a plausible total kcal via 4/4/9
+ *     Atwater math, so a magnitude-only check (the old version of this
+ *     function) doesn't catch them — only checking the ratio does.
+ *
+ * When either check fails, GPT returns its own corrected per-100g estimate
+ * for that food (not just a flag) — the caller scales this to the actual
+ * logged portion and uses it in place of the original min/mid/max values.
+ * Silently skips (no corrections) if GPT fails — better an uncorrected
+ * estimate than a broken meal log.
  */
 export async function validateNutritionEstimates(
   foods: Array<{ name: string; portion_g_mid: number; nutrients_mid: Record<string, number> }>
-): Promise<number[]> {
-  // Default: no correction
-  const scales = foods.map(() => 1.0)
-  if (foods.length === 0) return scales
+): Promise<MacroCorrection[]> {
+  const results: MacroCorrection[] = foods.map(() => null)
+  if (foods.length === 0) return results
 
   try {
     const foodList = foods
       .map((f, i) => {
-        const kcal = Math.round(f.nutrients_mid.energy_kcal ?? 0)
-        const kcalPer100g = f.portion_g_mid > 0 ? Math.round((kcal / f.portion_g_mid) * 100) : 0
-        return `${i + 1}. ${f.name} — ${Math.round(f.portion_g_mid)}g total → ${kcal} kcal (${kcalPer100g} kcal/100g)`
+        const grams = f.portion_g_mid || 1
+        const per100 = (key: string) => Math.round(((f.nutrients_mid[key] ?? 0) / grams) * 1000) / 10
+        return `${i + 1}. ${f.name} — logged as ${Math.round(grams)}g total. Current per-100g: ${per100('energy_kcal')} kcal, ${per100('protein_g')}g protein, ${per100('fat_g')}g fat, ${per100('carbohydrate_g')}g carbohydrate`
       })
       .join('\n')
 
@@ -291,60 +315,50 @@ export async function validateNutritionEstimates(
       response_format: { type: 'json_object' },
       messages: [{
         role: 'user',
-        content: `You are a nutrition fact-checker. Review these food estimates and flag any where the kcal/100g is obviously wrong. Only flag clear errors (>2× or <0.5× the expected value for that food type).
+        content: `You are a nutrition fact-checker. For each food below, check its per-100g values against TWO independent things:
 
-Reference values (kcal per 100g as consumed):
-- Milk, juice, broth: 30–70
-- Vegetables (cooked): 15–80
-- Fruit: 40–80
-- Cooked grains/pasta/rice: 100–180
-- Legumes (cooked): 80–150
-- Bread/tortilla: 200–280
-- Meat/fish/poultry (cooked): 100–300
-- Eggs: 140–160
-- Cheese: 280–420
-- Yogurt: 50–120
-- Nuts/seeds: 500–650
-- Oils/butter: 700–900
-- Protein powder: 350–400
-- Potato/root veg (cooked): 70–130
-- Pasta/gnocchi (cooked): 130–160
+1. MAGNITUDE — is kcal/100g roughly right for this food type? Reference (kcal/100g): milk/juice/broth 30–70, cooked vegetables 15–80, fruit 40–80, cooked grains/pasta/rice 100–180, cooked legumes 80–150, bread/tortilla 200–280, cooked meat/fish/poultry 100–300, eggs 140–160, cheese 280–420, yogurt 50–120, nuts/seeds 500–650, oils/butter 700–900, protein powder 350–420.
+
+2. COMPOSITION — does the protein/fat/carbohydrate SPLIT make sense for this specific food, regardless of whether the total kcal looks right? This is the important check: a food can be silently matched to the WRONG database record and still sum to a plausible total kcal, while the macro split is nonsensical for what the food actually is. Examples: whey protein powder should be protein-dominant (~70–90g protein per 100g, low carb/fat) — if it instead shows low protein and high carbs, that's wrong even if kcal/100g looks fine. Milk should have a roughly balanced split (~3g protein, ~3g fat, ~5g carb per 100g) — if it instead shows cheese-like high protein+fat with near-zero carbs, that's wrong. A lean meat showing significant carbs is wrong. Olive oil showing anything but ~0g protein/carb and ~100g fat is wrong.
 
 Foods to check:
 ${foodList}
 
-Return JSON: { "corrections": [ { "index": 1, "expected_kcal_per_100g": 61, "reason": "whole milk is ~61 kcal/100g not 300" } ] }
-Only include foods that need correction. Empty array if all look fine.`,
+For each food that fails EITHER check, respond with your own best correct per-100g estimate (energy_kcal, protein_g, fat_g, carbohydrate_g) for what that food should actually contain — replace it, don't just flag it.
+
+Return JSON: { "corrections": [ { "index": 1, "per_100g": { "energy_kcal": 400, "protein_g": 80, "fat_g": 6, "carbohydrate_g": 8 }, "reason": "whey protein powder should be protein-dominant, not carb-dominant" } ] }
+Only include foods that actually need correction. Empty array if all look fine.`,
       }],
-      max_tokens: 400,
+      max_tokens: 600,
     })
 
     const raw = response.choices[0]?.message?.content
-    if (!raw) return scales
+    if (!raw) return results
     const parsed = JSON.parse(raw)
 
     for (const correction of (parsed.corrections ?? [])) {
       const idx = (correction.index ?? 0) - 1  // 1-based to 0-based
       if (idx < 0 || idx >= foods.length) continue
-      const food = foods[idx]
-      const currentKcalPer100g = food.portion_g_mid > 0
-        ? (food.nutrients_mid.energy_kcal ?? 0) / food.portion_g_mid * 100
-        : 0
-      if (currentKcalPer100g === 0) continue
-      const expectedKcalPer100g = correction.expected_kcal_per_100g
-      if (!expectedKcalPer100g || expectedKcalPer100g <= 0) continue
+      const p = correction.per_100g
+      if (
+        !p ||
+        typeof p.energy_kcal !== 'number' || typeof p.protein_g !== 'number' ||
+        typeof p.fat_g !== 'number' || typeof p.carbohydrate_g !== 'number' ||
+        p.energy_kcal <= 0 || p.energy_kcal > 900  // never trust GPT's own correction blindly either
+      ) continue
 
-      const factor = expectedKcalPer100g / currentKcalPer100g
-      // Only apply if correction is significant (outside ±30% band) and not extreme
-      if (factor < 0.7 || factor > 1.4) {
-        scales[idx] = Math.min(Math.max(factor, 0.1), 10)  // clamp to sane range
-        console.log(`✓ Nutrition correction for "${food.name}": ×${factor.toFixed(2)} (${Math.round(currentKcalPer100g)} → ${expectedKcalPer100g} kcal/100g) — ${correction.reason}`)
+      results[idx] = {
+        energy_kcal: p.energy_kcal,
+        protein_g: p.protein_g,
+        fat_g: p.fat_g,
+        carbohydrate_g: p.carbohydrate_g,
       }
+      console.log(`✓ Nutrition correction for "${foods[idx].name}": ${correction.reason} — now ${p.energy_kcal}kcal / ${p.protein_g}p / ${p.fat_g}f / ${p.carbohydrate_g}c per 100g`)
     }
 
-    return scales
+    return results
   } catch (err) {
     console.warn('Nutrition validation failed — using uncorrected estimates:', err)
-    return scales
+    return results
   }
 }
