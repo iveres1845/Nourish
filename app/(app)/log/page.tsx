@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { localDate } from '@/lib/utils/date'
 
@@ -104,7 +105,24 @@ export default function LogPage() {
   const [expandedMealId, setExpandedMealId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
-  useEffect(() => { loadHistory() }, [])
+  // Today's macros + energy (relocated here from Nudge)
+  const [profile, setProfile] = useState<any>(null)
+  const [todayNutrients, setTodayNutrients] = useState<Record<string, number>>({})
+
+  useEffect(() => { loadHistory(); loadTodaySummary() }, [])
+
+  async function loadTodaySummary() {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+
+    const [profRes, dailyRes] = await Promise.all([
+      supabase.from('profiles').select('*').eq('id', user.id).maybeSingle(),
+      supabase.from('daily_logs').select('nutrient_totals').eq('user_id', user.id).eq('date', localDate()).maybeSingle(),
+    ])
+
+    setProfile(profRes.data ?? null)
+    setTodayNutrients((dailyRes.data?.nutrient_totals as Record<string, number>) ?? {})
+  }
 
   async function loadHistory() {
     setHistoryLoading(true)
@@ -169,6 +187,7 @@ export default function LogPage() {
     setHistory(prev => prev.filter(m => m.id !== meal.id))
     if (expandedMealId === meal.id) setExpandedMealId(null)
     setDeletingId(null)
+    if (meal.meal_date === localDate()) loadTodaySummary()
   }
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -435,7 +454,10 @@ export default function LogPage() {
 
   // ── Confirm ───────────────────────────────────────────────────────────────
   if (stage === 'confirm' && result) {
-    const totalEnergy = foods.reduce((sum, f) => sum + (f.nutrients_mid?.energy_kcal ?? 0), 0)
+    const totalEnergy  = foods.reduce((sum, f) => sum + (f.nutrients_mid?.energy_kcal ?? 0), 0)
+    const totalProtein = foods.reduce((sum, f) => sum + (f.nutrients_mid?.protein_g ?? 0), 0)
+    const totalCarbs   = foods.reduce((sum, f) => sum + (f.nutrients_mid?.carbohydrate_g ?? f.nutrients_mid?.carbs_g ?? 0), 0)
+    const totalFat     = foods.reduce((sum, f) => sum + (f.nutrients_mid?.fat_g ?? 0), 0)
 
     return (
       <div className="min-h-screen bg-cream-50 pb-36">
@@ -454,6 +476,14 @@ export default function LogPage() {
               <p className="text-xs text-gray-400">kcal total</p>
             </div>
           </div>
+          {foods.length > 0 && (
+            <div className="flex items-center gap-1.5 mt-3">
+              <span className="text-[10px] text-purple-600 bg-purple-50 px-2 py-0.5 rounded-full font-semibold">P {Math.round(totalProtein)}g</span>
+              <span className="text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full font-semibold">C {Math.round(totalCarbs)}g</span>
+              <span className="text-[10px] text-sage-600 bg-sage-50 px-2 py-0.5 rounded-full font-semibold">F {Math.round(totalFat)}g</span>
+              <span className="text-[10px] text-gray-400 ml-0.5">total meal macros</span>
+            </div>
+          )}
         </div>
 
         <div className="mx-4 mt-4">
@@ -526,6 +556,11 @@ export default function LogPage() {
                         {food.prep_method && food.prep_method !== 'unknown' && ` · ${food.prep_method}`}
                         {' · '}<span className="font-medium text-gray-600">{Math.round(food.nutrients_mid?.energy_kcal ?? 0)} kcal</span>
                       </p>
+                      <div className="flex items-center gap-1 flex-wrap mt-1">
+                        <span className="text-[10px] text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded-full font-semibold">P {Math.round(food.nutrients_mid?.protein_g ?? 0)}g</span>
+                        <span className="text-[10px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full font-semibold">C {Math.round(food.nutrients_mid?.carbohydrate_g ?? food.nutrients_mid?.carbs_g ?? 0)}g</span>
+                        <span className="text-[10px] text-sage-600 bg-sage-50 px-1.5 py-0.5 rounded-full font-semibold">F {Math.round(food.nutrients_mid?.fat_g ?? 0)}g</span>
+                      </div>
                     </div>
                     <div className="flex items-center gap-1.5 flex-shrink-0">
                       <span className={`text-[10px] font-semibold px-2 py-1 rounded-full ${
@@ -732,6 +767,63 @@ export default function LogPage() {
           {textMode ? 'Analyse description' : 'Analyse with AI'}
         </button>
 
+        {/* ── Today's Macros + Energy (relocated from Nudge) ────────────────── */}
+        {profile?.show_calories && (
+          <div className="card p-5 mt-1 fade-up">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-bold text-gray-800">Today's macros</h2>
+            </div>
+            <div className="grid grid-cols-3 gap-2.5 mb-3">
+              {[
+                { label: 'Protein', key: 'protein_g',      unit: 'g', bg: 'bg-purple-50', text: 'text-purple-700' },
+                { label: 'Carbs',   key: 'carbohydrate_g', unit: 'g', bg: 'bg-amber-50',  text: 'text-amber-700' },
+                { label: 'Fat',     key: 'fat_g',          unit: 'g', bg: 'bg-sage-50',   text: 'text-sage-700' },
+              ].map(m => (
+                <div key={m.key} className={`text-center ${m.bg} rounded-xl p-3`}>
+                  <p className={`text-xl font-bold ${m.text} leading-none`}>
+                    {Math.round(todayNutrients[m.key] ?? 0)}
+                    <span className="text-xs font-normal text-gray-400 ml-0.5">{m.unit}</span>
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">{m.label}</p>
+                </div>
+              ))}
+            </div>
+            {todayNutrients.fiber_g !== undefined && (
+              <div className="flex items-center justify-between text-xs text-gray-500 bg-gray-50 rounded-xl px-3 py-2.5 mb-4">
+                <span className="font-medium text-gray-600">🌾 Fibre</span>
+                <span className="font-semibold text-gray-700">{Math.round(todayNutrients.fiber_g ?? 0)}g <span className="text-gray-400 font-normal">/ {profile?.sex === 'female' ? 25 : 38}g</span></span>
+              </div>
+            )}
+            <div className="border-t border-gray-50 pt-3.5">
+              <div className="flex justify-between items-center mb-2">
+                <div>
+                  <p className="text-[11px] text-gray-400 font-medium">Energy today</p>
+                  <p className="text-xl font-bold text-gray-900 leading-tight">
+                    {Math.round(todayNutrients.energy_kcal ?? 0)}
+                    <span className="text-xs font-normal text-gray-400 ml-1">kcal</span>
+                  </p>
+                </div>
+                {(profile?.energy_range_low ?? profile?.daily_energy_target ?? 0) > 0 && (
+                  <div className="text-right">
+                    <p className="text-[11px] text-gray-400">Target</p>
+                    <p className="text-xs font-semibold text-gray-600">
+                      {Math.round(profile?.energy_range_low ?? 0)}–{Math.round(profile?.daily_energy_target ?? 0)} kcal
+                    </p>
+                  </div>
+                )}
+              </div>
+              {(profile?.daily_energy_target ?? 0) > 0 && (
+                <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-sage-500 transition-all duration-700"
+                    style={{ width: `${Math.min(((todayNutrients.energy_kcal ?? 0) / profile.daily_energy_target) * 100, 100)}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* ── Meal History ────────────────────────────────────────────────── */}
         <div className="pt-4">
           <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-3">Recent meals</p>
@@ -751,7 +843,7 @@ export default function LogPage() {
                     <span className="text-xs font-bold text-gray-500">{dateLabel(date)}</span>
                     <div className="flex-1 h-px bg-gray-100" />
                     <span className="text-[10px] text-gray-300">
-                      {grouped[date].reduce((s, m) => s + (m.nutrient_totals_mid?.energy_kcal ?? 0), 0) > 0
+                      {profile?.show_calories && grouped[date].reduce((s, m) => s + (m.nutrient_totals_mid?.energy_kcal ?? 0), 0) > 0
                         ? `${Math.round(grouped[date].reduce((s, m) => s + (m.nutrient_totals_mid?.energy_kcal ?? 0), 0))} kcal`
                         : ''}
                     </span>
@@ -787,9 +879,20 @@ export default function LogPage() {
                             )}
                             <div className="flex-1 min-w-0">
                               <p className="text-sm font-bold text-gray-800">{label}</p>
-                              <p className="text-xs text-gray-400">
-                                {kcal ? `${Math.round(kcal)} kcal` : 'tap to see details'}
-                              </p>
+                              {profile?.show_calories && kcal ? (
+                                <div className="flex items-center gap-1 flex-wrap mt-0.5">
+                                  <span className="text-xs text-gray-500 font-medium">{Math.round(kcal)} kcal</span>
+                                  {meal.nutrient_totals_mid && (
+                                    <>
+                                      <span className="text-[10px] text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded-full font-semibold">P {Math.round(meal.nutrient_totals_mid.protein_g ?? 0)}g</span>
+                                      <span className="text-[10px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full font-semibold">C {Math.round(meal.nutrient_totals_mid.carbohydrate_g ?? meal.nutrient_totals_mid.carbs_g ?? 0)}g</span>
+                                      <span className="text-[10px] text-sage-600 bg-sage-50 px-1.5 py-0.5 rounded-full font-semibold">F {Math.round(meal.nutrient_totals_mid.fat_g ?? 0)}g</span>
+                                    </>
+                                  )}
+                                </div>
+                              ) : (
+                                <p className="text-xs text-gray-400">tap to see details</p>
+                              )}
                             </div>
                             <div className="flex items-center gap-2 flex-shrink-0">
                               <svg
@@ -811,25 +914,34 @@ export default function LogPage() {
                                 </div>
                               ) : (
                                 <>
-                                  <div className="pt-3 space-y-2">
+                                  <div className="pt-3 space-y-2.5">
                                     {meal.food_items.map(item => (
-                                      <div key={item.id} className="flex items-center justify-between">
-                                        <div>
+                                      <div key={item.id} className="flex items-start justify-between">
+                                        <div className="min-w-0 flex-1">
                                           <p className="text-sm text-gray-700 capitalize font-medium">{item.name}</p>
                                           <p className="text-xs text-gray-400">
                                             ~{Math.round(item.portion_g_mid)}g
                                             {item.prep_method && item.prep_method !== 'unknown' && ` · ${item.prep_method}`}
                                           </p>
+                                          {profile?.show_calories && (
+                                            <div className="flex items-center gap-1 flex-wrap mt-1">
+                                              <span className="text-[10px] text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded-full font-semibold">P {Math.round(item.nutrients_mid?.protein_g ?? 0)}g</span>
+                                              <span className="text-[10px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full font-semibold">C {Math.round(item.nutrients_mid?.carbohydrate_g ?? item.nutrients_mid?.carbs_g ?? 0)}g</span>
+                                              <span className="text-[10px] text-sage-600 bg-sage-50 px-1.5 py-0.5 rounded-full font-semibold">F {Math.round(item.nutrients_mid?.fat_g ?? 0)}g</span>
+                                            </div>
+                                          )}
                                         </div>
-                                        <p className="text-xs font-semibold text-gray-600 flex-shrink-0 ml-3">
-                                          {Math.round(item.nutrients_mid?.energy_kcal ?? 0)} kcal
-                                        </p>
+                                        {profile?.show_calories && (
+                                          <p className="text-xs font-semibold text-gray-600 flex-shrink-0 ml-3">
+                                            {Math.round(item.nutrients_mid?.energy_kcal ?? 0)} kcal
+                                          </p>
+                                        )}
                                       </div>
                                     ))}
                                   </div>
 
                                   {/* Macro summary */}
-                                  {meal.nutrient_totals_mid && (
+                                  {profile?.show_calories && meal.nutrient_totals_mid && (
                                     <div className="mt-3 flex gap-2">
                                       {[
                                         { label: 'P', value: meal.nutrient_totals_mid.protein_g, unit: 'g', color: 'text-sage-600' },
@@ -843,21 +955,33 @@ export default function LogPage() {
                                     </div>
                                   )}
 
-                                  {/* Delete button */}
-                                  <button
-                                    onClick={() => deleteMeal(meal)}
-                                    disabled={deletingId === meal.id}
-                                    className="mt-3 flex items-center gap-1.5 text-xs text-red-400 hover:text-red-600 font-semibold disabled:opacity-40 transition-colors active:scale-95"
-                                  >
-                                    {deletingId === meal.id ? (
-                                      <div className="w-3.5 h-3.5 border border-red-400 border-t-transparent rounded-full animate-spin" />
-                                    ) : (
-                                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                                        <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>
+                                  {/* Edit + Delete */}
+                                  <div className="mt-3 flex items-center gap-4">
+                                    <Link
+                                      href={`/edit-meal/${meal.id}`}
+                                      className="flex items-center gap-1.5 text-xs text-sage-600 hover:text-sage-700 font-semibold transition-colors active:scale-95"
+                                    >
+                                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
                                       </svg>
-                                    )}
-                                    {deletingId === meal.id ? 'Deleting…' : 'Delete this meal'}
-                                  </button>
+                                      Edit
+                                    </Link>
+                                    <button
+                                      onClick={() => deleteMeal(meal)}
+                                      disabled={deletingId === meal.id}
+                                      className="flex items-center gap-1.5 text-xs text-red-400 hover:text-red-600 font-semibold disabled:opacity-40 transition-colors active:scale-95"
+                                    >
+                                      {deletingId === meal.id ? (
+                                        <div className="w-3.5 h-3.5 border border-red-400 border-t-transparent rounded-full animate-spin" />
+                                      ) : (
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                          <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>
+                                        </svg>
+                                      )}
+                                      {deletingId === meal.id ? 'Deleting…' : 'Delete this meal'}
+                                    </button>
+                                  </div>
                                 </>
                               )}
                             </div>
