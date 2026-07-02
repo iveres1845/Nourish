@@ -192,7 +192,8 @@ function generateInsights(
   energyTarget: number,
   energyLow: number,
   foodNames: string[],
-  sex: 'female' | 'male'
+  sex: 'female' | 'male',
+  showCalories: boolean
 ): GeneratedInsight[] {
   const insights: GeneratedInsight[] = []
 
@@ -205,7 +206,9 @@ function generateInsights(
         id: 'energy_low',
         type: 'energy',
         headline: 'You\'re significantly underfuelled',
-        copy: `You've logged ${Math.round(kcal)} kcal so far — that's ${Math.round(100 - pct)}% below your minimum target of ${Math.round(energyLow)} kcal. Chronic underfuelling affects hormones, metabolism, and recovery.`,
+        copy: showCalories
+          ? `You've logged ${Math.round(kcal)} kcal so far — that's ${Math.round(100 - pct)}% below your minimum target of ${Math.round(energyLow)} kcal. Chronic underfuelling affects hormones, metabolism, and recovery.`
+          : `You're ${Math.round(100 - pct)}% below your minimum energy target today. Chronic underfuelling affects hormones, metabolism, and recovery.`,
         emoji: '⚡',
         priority: 1,
       })
@@ -214,7 +217,9 @@ function generateInsights(
         id: 'energy_moderate',
         type: 'energy',
         headline: 'Room for more fuel today',
-        copy: `You're at ${Math.round(kcal)} kcal with a minimum target of ${Math.round(energyLow)} kcal. Add a nutrient-dense snack or bigger portion at dinner.`,
+        copy: showCalories
+          ? `You're at ${Math.round(kcal)} kcal with a minimum target of ${Math.round(energyLow)} kcal. Add a nutrient-dense snack or bigger portion at dinner.`
+          : `You're at ${Math.round(pct)}% of your minimum energy target. Add a nutrient-dense snack or bigger portion at dinner.`,
         emoji: '⚡',
         priority: 2,
       })
@@ -223,7 +228,9 @@ function generateInsights(
         id: 'energy_good',
         type: 'win',
         headline: 'Energy intake on track',
-        copy: `You're at ${Math.round(kcal)} kcal — right in your target zone. Keep it up.`,
+        copy: showCalories
+          ? `You're at ${Math.round(kcal)} kcal — right in your target zone. Keep it up.`
+          : `You're right in your target zone today. Keep it up.`,
         emoji: '✅',
         priority: 10,
       })
@@ -289,25 +296,50 @@ function generateInsights(
 
 // ─── Subcomponents ────────────────────────────────────────────────────────────
 
-function NutrientBar({ label, pct, emoji }: { label: string; pct: number; emoji: string }) {
+type FoodContributor = { name: string; amount: number }
+
+function NutrientBar({ label, pct, emoji, unit, expanded, onToggle, contributors, emptyLabel }: {
+  label: string; pct: number; emoji: string; unit?: string
+  expanded: boolean; onToggle: () => void; contributors: FoodContributor[]; emptyLabel: string
+}) {
   const clamped = Math.min(pct, 100)
   const color = pct >= 90 ? 'bg-sage-500' : pct >= 50 ? 'bg-amber-400' : 'bg-terracotta-400'
 
   return (
-    <div className="flex items-center gap-3">
-      <span className="text-base w-6 text-center">{emoji}</span>
-      <div className="flex-1">
-        <div className="flex justify-between mb-1">
-          <span className="text-xs font-medium text-gray-700">{label}</span>
-          <span className="text-xs text-gray-500">{Math.round(pct)}%</span>
+    <div>
+      <button onClick={onToggle} className="w-full flex items-center gap-3 text-left active:opacity-70 transition-opacity">
+        <span className="text-base w-6 text-center">{emoji}</span>
+        <div className="flex-1">
+          <div className="flex justify-between mb-1">
+            <span className="text-xs font-medium text-gray-700">{label}</span>
+            <span className="text-xs text-gray-500">{Math.round(pct)}%</span>
+          </div>
+          <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-700 ${color}`}
+              style={{ width: `${clamped}%` }}
+            />
+          </div>
         </div>
-        <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-          <div
-            className={`h-full rounded-full transition-all duration-700 ${color}`}
-            style={{ width: `${clamped}%` }}
-          />
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"
+          className={`text-gray-300 flex-shrink-0 transition-transform ${expanded ? 'rotate-180' : ''}`}>
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+      {expanded && (
+        <div className="ml-9 mt-1.5 mb-1 pl-3 border-l-2 border-gray-100 space-y-1.5">
+          {contributors.length > 0 ? contributors.map(c => (
+            <div key={c.name} className="flex items-center justify-between gap-2">
+              <span className="text-xs text-gray-600 capitalize truncate">{c.name}</span>
+              <span className="text-xs font-medium text-gray-400 flex-shrink-0">
+                {c.amount < 1 ? c.amount.toFixed(2) : Math.round(c.amount)}{unit ?? ''}
+              </span>
+            </div>
+          )) : (
+            <p className="text-xs text-gray-400">{emptyLabel}</p>
+          )}
         </div>
-      </div>
+      )}
     </div>
   )
 }
@@ -525,6 +557,8 @@ export default function InsightsPage() {
   const [patterns,         setPatterns]         = useState<CorrelationPattern[]>([])
   const [bottomHugMessage, setBottomHugMessage] = useState<string | null>(null)
   const [showAllNutrients, setShowAllNutrients] = useState(false)
+  const [allFoodItems, setAllFoodItems] = useState<Array<{ name: string; nutrients_mid: Record<string, number>; meal_date: string }>>([])
+  const [expandedNutrient, setExpandedNutrient] = useState<string | null>(null)
 
   useEffect(() => {
     async function load() {
@@ -555,22 +589,32 @@ export default function InsightsPage() {
         .eq('date', today)
         .single()
 
-      // Load today's food item names
-      const { data: meals } = await supabase
+      // Load food items for the last 7 days — used for pairing-rule food matching
+      // and for "which foods contributed to this nutrient" lookups
+      const weekStartStr = localDate(-6)
+      const { data: weekMeals } = await supabase
         .from('meals')
-        .select('id, logged_at')
+        .select('id, meal_date')
         .eq('user_id', user.id)
-        .gte('logged_at', `${today}T00:00:00`)
-        .lte('logged_at', `${today}T23:59:59`)
+        .gte('meal_date', weekStartStr)
+        .lte('meal_date', today)
 
       let names: string[] = []
-      if (meals && meals.length > 0) {
-        const mealIds = meals.map(m => m.id)
+      if (weekMeals && weekMeals.length > 0) {
+        const mealDateById = new Map(weekMeals.map(m => [m.id, m.meal_date]))
+        const mealIds = weekMeals.map(m => m.id)
         const { data: items } = await supabase
           .from('food_items')
-          .select('name')
+          .select('meal_id, name, nutrients_mid')
           .in('meal_id', mealIds)
-        names = (items ?? []).map(i => i.name)
+
+        const weekFoodItems = (items ?? []).map(i => ({
+          name: i.name,
+          nutrients_mid: (i.nutrients_mid as Record<string, number>) ?? {},
+          meal_date: mealDateById.get(i.meal_id) ?? '',
+        }))
+        setAllFoodItems(weekFoodItems)
+        names = weekFoodItems.filter(f => f.meal_date === today).map(f => f.name)
         setFoodNames(names)
       }
 
@@ -608,7 +652,7 @@ export default function InsightsPage() {
         setAvg7Nutrients(avgNut)
         setAvg7DaysLogged(daysLogged)
         const sex = prof.sex ?? 'female'
-        setInsights7(generateInsights(avgNut, target, low, names, sex))
+        setInsights7(generateInsights(avgNut, target, low, names, sex, prof.show_calories ?? false))
       }
 
       // Correlation patterns from 14 days of matched data
@@ -639,7 +683,7 @@ export default function InsightsPage() {
         setNoData(true)
       } else {
         const sex = prof.sex ?? 'female'
-        const generated = generateInsights(nut, target, low, names, sex)
+        const generated = generateInsights(nut, target, low, names, sex, prof.show_calories ?? false)
         setInsights(generated)
       }
 
@@ -660,7 +704,27 @@ export default function InsightsPage() {
   const sex = profile?.sex ?? 'female'
   const activeNutrients = view === 'today' ? nutrients : avg7Nutrients
   const activeInsights = view === 'today' ? insights : insights7
-  const activeEnergy = activeNutrients.energy_kcal ?? 0
+
+  // Foods logged in the active view window — used to answer "where did this come from?"
+  const activeFoodItems = view === 'today'
+    ? allFoodItems.filter(f => f.meal_date === localDate())
+    : allFoodItems
+
+  function getContributors(nutrientKey: string): FoodContributor[] {
+    return activeFoodItems
+      .map(f => ({ name: f.name, amount: f.nutrients_mid?.[nutrientKey] ?? 0 }))
+      .filter(f => f.amount > 0)
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 8)
+  }
+
+  function toggleNutrient(key: string) {
+    setExpandedNutrient(prev => prev === key ? null : key)
+  }
+
+  const contributorEmptyLabel = view === 'today'
+    ? 'No foods logged today with this nutrient.'
+    : 'No foods logged this week with this nutrient.'
 
   // Top 8 nutrients sorted by lowest % first
   const nutrientBars = Object.entries(DRI)
@@ -733,7 +797,17 @@ export default function InsightsPage() {
               </div>
               <div className="space-y-3">
                 {nutrientBars.map(({ key, ref, pct }) => (
-                  <NutrientBar key={key} label={ref.label} pct={pct} emoji={ref.emoji} />
+                  <NutrientBar
+                    key={key}
+                    label={ref.label}
+                    pct={pct}
+                    emoji={ref.emoji}
+                    unit={ref.unit}
+                    expanded={expandedNutrient === key}
+                    onToggle={() => toggleNutrient(key)}
+                    contributors={getContributors(key)}
+                    emptyLabel={contributorEmptyLabel}
+                  />
                 ))}
               </div>
             </div>
@@ -822,61 +896,6 @@ export default function InsightsPage() {
               </div>
             )}
 
-            {/* Macros + energy */}
-            <div className="card p-5 mt-4 fade-up" style={{ animationDelay: '0.15s' }}>
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-sm font-bold text-gray-800">
-                  Macros {view === '7day' && <span className="text-xs font-normal text-gray-400">— daily avg</span>}
-                </h2>
-              </div>
-              <div className="grid grid-cols-3 gap-2.5 mb-3">
-                {[
-                  { label: 'Protein', key: 'protein_g',      unit: 'g', bg: 'bg-purple-50', text: 'text-purple-700' },
-                  { label: 'Carbs',   key: 'carbohydrate_g', unit: 'g', bg: 'bg-amber-50',  text: 'text-amber-700' },
-                  { label: 'Fat',     key: 'fat_g',          unit: 'g', bg: 'bg-sage-50',   text: 'text-sage-700' },
-                ].map(m => (
-                  <div key={m.key} className={`text-center ${m.bg} rounded-xl p-3`}>
-                    <p className={`text-xl font-bold ${m.text} leading-none`}>
-                      {Math.round(activeNutrients[m.key] ?? 0)}
-                      <span className="text-xs font-normal text-gray-400 ml-0.5">{m.unit}</span>
-                    </p>
-                    <p className="text-xs text-gray-500 mt-1">{m.label}</p>
-                  </div>
-                ))}
-              </div>
-              {activeNutrients.fiber_g !== undefined && (
-                <div className="flex items-center justify-between text-xs text-gray-500 bg-gray-50 rounded-xl px-3 py-2.5 mb-4">
-                  <span className="font-medium text-gray-600">🌾 Fibre</span>
-                  <span className="font-semibold text-gray-700">{Math.round(activeNutrients.fiber_g ?? 0)}g <span className="text-gray-400 font-normal">/ {sex === 'female' ? 25 : 38}g</span></span>
-                </div>
-              )}
-              <div className="border-t border-gray-50 pt-3.5">
-                <div className="flex justify-between items-center mb-2">
-                  <div>
-                    <p className="text-[11px] text-gray-400 font-medium">
-                      {view === 'today' ? 'Energy today' : '7-day avg energy'}
-                    </p>
-                    <p className="text-xl font-bold text-gray-900 leading-tight">
-                      {Math.round(activeEnergy)}
-                      <span className="text-xs font-normal text-gray-400 ml-1">kcal</span>
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-[11px] text-gray-400">Target</p>
-                    <p className="text-xs font-semibold text-gray-600">{Math.round(energyLow)}–{Math.round(energyTarget)} kcal</p>
-                  </div>
-                </div>
-                {energyTarget > 0 && (
-                  <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-sage-500 transition-all duration-700"
-                      style={{ width: `${Math.min(activeEnergy / energyTarget * 100, 100)}%` }}
-                    />
-                  </div>
-                )}
-              </div>
-            </div>
-
             {/* All nutrients panel */}
             <div className="mt-4 fade-up">
               <button
@@ -913,8 +932,8 @@ export default function InsightsPage() {
                             else if (item.unit === 'mg') displayVal = `${val < 1 ? val.toFixed(2) : Math.round(val)}${item.unit}`
                             else displayVal = `${val < 1 ? val.toFixed(1) : Math.round(val)}${item.unit}`
 
-                            return (
-                              <div key={item.key} className={`flex items-center gap-2 py-1 ${!hasVal ? 'opacity-40' : ''}`}>
+                            const rowContent = (
+                              <>
                                 <span className="w-5 text-sm text-center flex-shrink-0">{item.emoji}</span>
                                 <span className="text-xs text-gray-700 flex-1 min-w-0 truncate">{item.label}</span>
                                 <span className="text-xs font-semibold text-gray-800 flex-shrink-0 tabular-nums">
@@ -935,6 +954,34 @@ export default function InsightsPage() {
                                     }`}>{Math.round(pct)}%</span>
                                   </div>
                                 )}
+                              </>
+                            )
+
+                            const isExpanded = expandedNutrient === item.key
+
+                            return (
+                              <div key={item.key} className={!hasVal ? 'opacity-40' : ''}>
+                                {hasVal ? (
+                                  <button onClick={() => toggleNutrient(item.key)} className="w-full flex items-center gap-2 py-1 text-left">
+                                    {rowContent}
+                                  </button>
+                                ) : (
+                                  <div className="flex items-center gap-2 py-1">{rowContent}</div>
+                                )}
+                                {hasVal && isExpanded && (
+                                  <div className="ml-7 mb-1.5 pl-3 border-l-2 border-gray-100 space-y-1.5">
+                                    {getContributors(item.key).length > 0 ? getContributors(item.key).map(c => (
+                                      <div key={c.name} className="flex items-center justify-between gap-2">
+                                        <span className="text-xs text-gray-600 capitalize truncate">{c.name}</span>
+                                        <span className="text-xs font-medium text-gray-400 flex-shrink-0">
+                                          {c.amount < 1 ? c.amount.toFixed(2) : Math.round(c.amount)}{item.unit}
+                                        </span>
+                                      </div>
+                                    )) : (
+                                      <p className="text-xs text-gray-400">{contributorEmptyLabel}</p>
+                                    )}
+                                  </div>
+                                )}
                               </div>
                             )
                           })}
@@ -953,4 +1000,3 @@ export default function InsightsPage() {
     </div>
   )
 }
-
