@@ -225,6 +225,25 @@ export async function getFoodNutrients(fdcId: number): Promise<Record<string, nu
 }
 
 /**
+ * A USDA record is only usable if it has a complete macro profile.
+ * Some Foundation/SR Legacy records report energy but are missing one or more
+ * of protein/fat/carbohydrate (e.g. a derived "carbohydrate, by difference"
+ * value that wasn't computed for that record). Accepting those silently turns
+ * missing values into 0 downstream, which skews the macro breakdown badly
+ * (protein/fat inflated, carbs collapsed to ~0) while the calorie total still
+ * looks roughly right. Treat incomplete records as unusable so the caller
+ * falls through to the next candidate — or to the GPT fallback, which always
+ * returns a complete profile.
+ */
+function hasCompleteMacroProfile(per100g: Record<string, number>): boolean {
+  return (
+    typeof per100g.protein_g === 'number' &&
+    typeof per100g.fat_g === 'number' &&
+    typeof per100g.carbohydrate_g === 'number'
+  )
+}
+
+/**
  * Scale nutrients from per-100g to actual portion size.
  */
 export function scaleNutrients(
@@ -300,6 +319,10 @@ export async function lookupFoodNutrients(params: {
     for (const candidate of brandedCandidates) {
       const per100g = await getFoodNutrients(candidate.fdcId)
       if (!per100g.energy_kcal || per100g.energy_kcal === 0) continue
+      if (!hasCompleteMacroProfile(per100g)) {
+        console.warn(`Incomplete macro profile for branded "${name}" (${candidate.fdcId}) — skipping candidate`)
+        continue
+      }
       const mid = (portion_g_min + portion_g_max) / 2
       console.log(`✓ Branded USDA match for "${name}": ${candidate.description} (${candidate.fdcId})`)
       return {
@@ -321,6 +344,12 @@ export async function lookupFoodNutrients(params: {
     const per100g = await getFoodNutrients(candidate.fdcId)
     // Must have energy_kcal specifically — a record without it is useless
     if (!per100g.energy_kcal || per100g.energy_kcal === 0) continue
+    // Must also have all three core macros — a record missing one (e.g. no
+    // carbohydrate value) skews the breakdown even though kcal looks fine
+    if (!hasCompleteMacroProfile(per100g)) {
+      console.warn(`Incomplete macro profile for "${name}" (${candidate.fdcId}: ${candidate.description}) — trying next candidate`)
+      continue
+    }
 
     const mid = (portion_g_min + portion_g_max) / 2
     return {

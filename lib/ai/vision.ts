@@ -215,10 +215,12 @@ export async function estimateFoodNutrientsPer100g(foodName: string): Promise<Re
         content: `Give me the nutritional content of "${foodName}" per 100 GRAMS (not per serving, not per cup, not per piece — strictly per 100g of the food as consumed).
 
 Reference checks:
-- Whole milk per 100g ≈ 61 kcal, 3.3g protein, 3.5g fat
-- Cooked white rice per 100g ≈ 130 kcal, 2.7g protein, 0.3g fat
-- Chicken breast cooked per 100g ≈ 165 kcal, 31g protein, 3.6g fat
-- Olive oil per 100g ≈ 884 kcal, 0g protein, 100g fat
+- Whole milk per 100g ≈ 61 kcal, 3.3g protein, 3.5g fat, 4.8g carbohydrate
+- Cooked white rice per 100g ≈ 130 kcal, 2.7g protein, 0.3g fat, 28g carbohydrate
+- Chicken breast cooked per 100g ≈ 165 kcal, 31g protein, 3.6g fat, 0g carbohydrate
+- Olive oil per 100g ≈ 884 kcal, 0g protein, 100g fat, 0g carbohydrate
+
+Every food has protein, fat, AND carbohydrate — even foods that are low in one (e.g. milk is low in fat, chicken is ~0 carbohydrate). Never leave carbohydrate_g at 0 for foods that genuinely contain carbs (dairy, fruit, grains, legumes, vegetables).
 
 Return ONLY a JSON object with numeric values — all per 100g:
 {
