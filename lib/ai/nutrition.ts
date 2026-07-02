@@ -244,6 +244,44 @@ function hasCompleteMacroProfile(per100g: Record<string, number>): boolean {
 }
 
 /**
+ * Known-problematic USDA searches: short, common staple-food names where
+ * FDC's text-relevance ranking surfaces unrelated products ahead of the
+ * actual generic food. Confirmed live: searching "Whole Milk" (and even
+ * "milk" alone) ranks "Cheese, mozzarella, whole milk" and "Yogurt, plain,
+ * whole milk" above the real "Milk, whole, 3.25% milkfat" record — both
+ * contain "whole"/"milk" as descriptor words, which is enough for FDC's
+ * search to rank them higher than the true match. This silently produced
+ * cheese-level protein/fat with near-zero carbs for a logged glass of milk.
+ * For these known staples we bypass search entirely and fetch the verified
+ * correct fdcId directly. fdcId 746782 confirmed via a live FDC lookup as
+ * "Milk, whole, 3.25% milkfat, with added vitamin D" (Foundation).
+ */
+const STAPLE_FOOD_OVERRIDES: Record<string, number> = {
+  'milk': 746782,
+  'whole milk': 746782,
+  'cow milk': 746782,
+  "cow's milk": 746782,
+  'dairy milk': 746782,
+  'regular milk': 746782,
+}
+
+/**
+ * Reject USDA candidates whose primary food category — the text before the
+ * first comma in FDC's "Category, descriptor, descriptor…" naming
+ * convention — shares no core word with the query. This is what should have
+ * caught the milk→cheese mismatch above: "Cheese, mozzarella, whole milk"
+ * has primary category "cheese", which has nothing in common with a "milk"
+ * query, even though the full description contains "milk". Applied as a
+ * cheap pre-filter before spending an API call fetching nutrient data.
+ */
+function isPlausibleCandidate(queryName: string, candidateDescription: string): boolean {
+  const primarySegment = candidateDescription.split(',')[0].toLowerCase().trim()
+  const queryWords = queryName.toLowerCase().split(/\s+/).filter(w => w.length > 2)
+  if (queryWords.length === 0) return true
+  return queryWords.some(w => primarySegment.includes(w))
+}
+
+/**
  * Scale nutrients from per-100g to actual portion size.
  */
 export function scaleNutrients(
@@ -312,6 +350,25 @@ export async function lookupFoodNutrients(params: {
   source: 'branded' | 'generic'
 } | null> {
   const { name, portion_g_min, portion_g_max, prep_method } = params
+  const normalizedName = name.trim().toLowerCase().replace(/\s+/g, ' ')
+
+  // ── Step 0: Known-staple override — bypasses unreliable USDA text search ──
+  const overrideFdcId = STAPLE_FOOD_OVERRIDES[normalizedName]
+  if (overrideFdcId) {
+    const per100g = await getFoodNutrients(overrideFdcId)
+    if (per100g.energy_kcal && hasCompleteMacroProfile(per100g)) {
+      const mid = (portion_g_min + portion_g_max) / 2
+      console.log(`✓ Staple override match for "${name}": fdcId ${overrideFdcId}`)
+      return {
+        fdcId: overrideFdcId,
+        nutrients_min: applyPrepAdjustments(scaleNutrients(per100g, portion_g_min), prep_method),
+        nutrients_max: applyPrepAdjustments(scaleNutrients(per100g, portion_g_max), prep_method),
+        nutrients_mid: applyPrepAdjustments(scaleNutrients(per100g, mid), prep_method),
+        source: 'generic',
+      }
+    }
+    console.warn(`Staple override fdcId ${overrideFdcId} for "${name}" failed to return usable data — falling back to search`)
+  }
 
   // ── Step 1: Try branded search first if name looks brand-specific ──────────
   if (looksLikeBrandedFood(name)) {
@@ -341,6 +398,12 @@ export async function lookupFoodNutrients(params: {
   if (candidates.length === 0) return null
 
   for (const candidate of candidates) {
+    // Reject candidates whose primary food category doesn't plausibly match
+    // the query (e.g. a "milk" query matching "Cheese, mozzarella, whole milk")
+    if (!isPlausibleCandidate(name, candidate.description)) {
+      console.warn(`Skipping implausible candidate for "${name}": ${candidate.description}`)
+      continue
+    }
     const per100g = await getFoodNutrients(candidate.fdcId)
     // Must have energy_kcal specifically — a record without it is useless
     if (!per100g.energy_kcal || per100g.energy_kcal === 0) continue
