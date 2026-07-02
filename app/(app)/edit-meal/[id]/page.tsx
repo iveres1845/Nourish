@@ -36,6 +36,7 @@ export default function EditMealPage() {
   const [loading, setLoading] = useState(true)
   const [saving,  setSaving]  = useState(false)
   const [error,   setError]   = useState<string | null>(null)
+  const [showCalories, setShowCalories] = useState(false)
 
   // Per-item editing state
   const [editingId,  setEditingId]  = useState<string | null>(null)
@@ -46,7 +47,12 @@ export default function EditMealPage() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { router.push('/login'); return }
 
-      const res = await fetch(`/api/meals/${mealId}`)
+      const [res, profRes] = await Promise.all([
+        fetch(`/api/meals/${mealId}`),
+        supabase.from('profiles').select('show_calories').eq('id', user.id).maybeSingle(),
+      ])
+      setShowCalories(profRes.data?.show_calories ?? false)
+
       if (!res.ok) { setError('Meal not found'); setLoading(false); return }
       const { meal: data } = await res.json()
       setMeal(data)
@@ -93,7 +99,7 @@ export default function EditMealPage() {
         body: JSON.stringify({ food_items: items }),
       })
       if (!res.ok) throw new Error('Save failed')
-      router.push('/dashboard')
+      router.push('/log')
     } catch {
       setError('Could not save changes. Please try again.')
       setSaving(false)
@@ -162,7 +168,7 @@ export default function EditMealPage() {
                     <p className="text-sm font-semibold text-gray-800 leading-snug">{item.name}</p>
                     <p className="text-xs text-gray-400 mt-0.5">
                       {Math.round(item.portion_g_mid)}g
-                      {item.nutrients_mid.energy_kcal
+                      {showCalories && item.nutrients_mid.energy_kcal
                         ? ` · ${Math.round(item.nutrients_mid.energy_kcal)} kcal`
                         : ''}
                     </p>
@@ -209,7 +215,7 @@ export default function EditMealPage() {
         </div>
 
         {/* Total */}
-        {totalKcal > 0 && (
+        {showCalories && totalKcal > 0 && (
           <div className="card px-4 py-3 flex items-center justify-between">
             <span className="text-sm text-gray-600 font-medium">Revised total</span>
             <span className="text-base font-bold text-gray-900">{Math.round(totalKcal)} kcal</span>
