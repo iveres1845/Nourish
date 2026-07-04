@@ -208,7 +208,15 @@ export async function getFoodNutrients(fdcId: number): Promise<Record<string, nu
       )
       if (nutrient) {
         const val = nutrient.amount ?? nutrient.value
-        if (val !== undefined) result[key] = val  // per 100g
+        if (val !== undefined) {
+          // FDC reports EPA/DHA (nutrient IDs 1278/1272) in grams, like other
+          // fatty acids — but our key names (and the rest of the app) treat
+          // omega3_epa_mg/omega3_dha_mg as milligrams. Without this conversion,
+          // logged fish showed EPA/DHA ~1000x too small (e.g. sardines'
+          // 0.473g EPA/100g stored as "0.473mg", rounding away to ~nothing).
+          const isGramsReportedAsMg = key === 'omega3_epa_mg' || key === 'omega3_dha_mg'
+          result[key] = isGramsReportedAsMg ? val * 1000 : val  // per 100g
+        }
       }
     }
 
@@ -268,19 +276,35 @@ const STAPLE_FOOD_OVERRIDES: Record<string, number> = {
 }
 
 /**
- * Reject USDA candidates whose primary food category — the text before the
- * first comma in FDC's "Category, descriptor, descriptor…" naming
- * convention — shares no core word with the query. This is what should have
- * caught the milk→cheese mismatch above: "Cheese, mozzarella, whole milk"
- * has primary category "cheese", which has nothing in common with a "milk"
- * query, even though the full description contains "milk". Applied as a
- * cheap pre-filter before spending an API call fetching nutrient data.
+ * Reject USDA candidates whose category + immediate descriptor — the first
+ * TWO comma-separated segments in FDC's "Category, descriptor, descriptor…"
+ * naming convention — share no core word with the query. This is what should
+ * have caught the milk→cheese mismatch: "Cheese, mozzarella, whole milk" has
+ * category+descriptor "cheese, mozzarella", which has nothing in common with
+ * a "milk" query, even though the full description contains "milk" further
+ * along. Applied as a cheap pre-filter before spending an API call fetching
+ * nutrient data.
+ *
+ * Checking two segments (not just the first) matters: FDC often puts the
+ * broad category first and the specific species/variety second — e.g.
+ * "Fish, sardine, Atlantic, canned in oil…" for sardines, or "Milk,
+ * buttermilk, fluid, whole" for buttermilk. A first-segment-only check
+ * rejected these correct matches (category word "fish"/"milk" alone doesn't
+ * contain "sardines"/"buttermilk"), silently forcing a fallback to GPT
+ * estimation that doesn't even ask for omega-3 fields — which is why logged
+ * sardines showed no omega-3 data at all despite USDA having good EPA/DHA
+ * numbers for the correct record.
  */
 function isPlausibleCandidate(queryName: string, candidateDescription: string): boolean {
-  const primarySegment = candidateDescription.split(',')[0].toLowerCase().trim()
+  const segments = candidateDescription.toLowerCase().split(',').slice(0, 2).map(s => s.trim())
+  const combined = segments.join(' ')
   const queryWords = queryName.toLowerCase().split(/\s+/).filter(w => w.length > 2)
   if (queryWords.length === 0) return true
-  return queryWords.some(w => primarySegment.includes(w))
+  return queryWords.some(w => {
+    // naive singularization so "sardines" matches FDC's "sardine"
+    const singular = w.endsWith('s') && w.length > 3 ? w.slice(0, -1) : w
+    return combined.includes(w) || combined.includes(singular)
+  })
 }
 
 /**

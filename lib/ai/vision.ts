@@ -223,6 +223,8 @@ Reference checks:
 
 Every food has protein, fat, AND carbohydrate — even foods that are low in one (e.g. milk is low in fat, chicken is ~0 carbohydrate). Never leave carbohydrate_g at 0 for foods that genuinely contain carbs (dairy, fruit, grains, legumes, vegetables).
 
+If this is a fatty fish (sardines, salmon, mackerel, herring, anchovies, tuna) or another known omega-3 source (walnuts, flaxseed, chia seeds, fish oil), include realistic omega3_epa_mg and omega3_dha_mg (marine sources — sardines are ~470mg EPA / ~510mg DHA per 100g) and/or omega3_ala_g (plant sources — walnuts are ~9g ALA per 100g). Leave these at 0 for foods that genuinely don't contain omega-3s rather than guessing.
+
 Return ONLY a JSON object with numeric values — all per 100g:
 {
   "energy_kcal": 0,
@@ -240,7 +242,10 @@ Return ONLY a JSON object with numeric values — all per 100g:
   "vitamin_c_mg": 0,
   "vitamin_a_mcg": 0,
   "folate_mcg": 0,
-  "saturated_fat_g": 0
+  "saturated_fat_g": 0,
+  "omega3_ala_g": 0,
+  "omega3_epa_mg": 0,
+  "omega3_dha_mg": 0
 }
 JSON only. energy_kcal must be ≤ 900 (nothing edible exceeds 900 kcal/100g).`,
       }],
