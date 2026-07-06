@@ -21,7 +21,10 @@ const DRI: Record<string, { label: string; unit: string; female: number; male: n
   potassium_mg:    { label: 'Potassium',   unit: 'mg',  female: 2600, male: 3400, emoji: '🍌' },
   fiber_g:         { label: 'Fibre',       unit: 'g',   female: 25,   male: 38,   emoji: '🌾' },
   protein_g:       { label: 'Protein',     unit: 'g',   female: 46,   male: 56,   emoji: '💪' },
-  omega3_ala_g:    { label: 'Omega-3',     unit: 'g',   female: 1.1,  male: 1.6,  emoji: '🐟' },
+  // Combined omega-3 total (ALA + EPA + DHA, all converted to grams) — computed
+  // and injected onto the nutrients object as `omega3_total_g` below, since ALA
+  // alone showed 0% for marine-only sources like fish (no plant ALA content).
+  omega3_total_g:  { label: 'Omega-3',     unit: 'g',   female: 1.1,  male: 1.6,  emoji: '🐟' },
   vitamin_a_mcg:   { label: 'Vitamin A',   unit: 'mcg', female: 700,  male: 900,  emoji: '👁️' },
   selenium_mcg:    { label: 'Selenium',    unit: 'mcg', female: 55,   male: 55,   emoji: '🔬' },
   choline_mg:      { label: 'Choline',     unit: 'mg',  female: 425,  male: 550,  emoji: '🥚' },
@@ -150,7 +153,7 @@ const PAIRING_RULES: PairingRule[] = [
   },
   {
     id: 'omega3_boost',
-    trigger_nutrients: ['omega3_ala_g'],
+    trigger_nutrients: ['omega3_total_g'],
     headline: 'Boost your omega-3s today',
     copy: 'You\'re short on omega-3 fatty acids, which support brain health, inflammation control, and hormonal balance.',
     suggest: ['walnuts', 'flaxseeds', 'chia seeds', 'salmon', 'sardines'],
@@ -178,7 +181,7 @@ const PAIRING_RULES: PairingRule[] = [
 
 type GeneratedInsight = {
   id: string
-  type: 'gap' | 'boost' | 'warning' | 'tip' | 'energy' | 'win'
+  type: 'boost' | 'warning' | 'tip' | 'energy' | 'win'
   headline: string
   copy: string
   suggest?: string[]
@@ -268,29 +271,6 @@ function generateInsights(
     }
   }
 
-  // 3. Nutrient gap cards (show top 4 lowest)
-  const gapCards: { key: string; pct: number; ref: typeof DRI[string] }[] = []
-  for (const [key, ref] of Object.entries(DRI)) {
-    const target = sex === 'female' ? ref.female : ref.male
-    const actual = nutrients[key] ?? 0
-    const pct = (actual / target) * 100
-    if (pct < 90) {
-      gapCards.push({ key, pct, ref })
-    }
-  }
-  gapCards.sort((a, b) => a.pct - b.pct)
-  for (const gap of gapCards.slice(0, 5)) {
-    insights.push({
-      id: `gap_${gap.key}`,
-      type: 'gap',
-      headline: `${gap.ref.emoji} ${gap.ref.label}`,
-      copy: `${Math.round(gap.pct)}% of daily target`,
-      pct: gap.pct,
-      emoji: gap.ref.emoji,
-      priority: gap.pct < 30 ? 3 : gap.pct < 60 ? 5 : 7,
-    })
-  }
-
   return insights.sort((a, b) => a.priority - b.priority)
 }
 
@@ -351,36 +331,8 @@ function InsightCard({ insight }: { insight: GeneratedInsight }) {
     tip:     { bg: 'bg-blue-50',       border: 'border-blue-200',       badge: 'bg-blue-100 text-blue-800',       icon: '💡' },
     energy:  { bg: 'bg-terracotta-50', border: 'border-terracotta-200', badge: 'bg-terracotta-100 text-terracotta-800', icon: '⚡' },
     win:     { bg: 'bg-sage-50',       border: 'border-sage-200',       badge: 'bg-sage-100 text-sage-800',       icon: '✓' },
-    gap:     { bg: 'bg-gray-50',       border: 'border-gray-200',       badge: 'bg-gray-100 text-gray-700',       icon: '○' },
   }
   const cfg = typeConfig[insight.type] ?? typeConfig.tip
-
-  if (insight.type === 'gap') {
-    return (
-      <div className={`rounded-2xl border p-4 ${cfg.bg} ${cfg.border}`}>
-        <div className="flex items-center justify-between mb-2">
-          <span className="font-semibold text-gray-800">{insight.headline}</span>
-          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-            (insight.pct ?? 0) < 30 ? 'bg-terracotta-100 text-terracotta-800' :
-            (insight.pct ?? 0) < 60 ? 'bg-amber-100 text-amber-800' :
-            'bg-gray-100 text-gray-700'
-          }`}>
-            {Math.round(insight.pct ?? 0)}%
-          </span>
-        </div>
-        <div className="h-2 bg-white rounded-full overflow-hidden">
-          <div
-            className={`h-full rounded-full transition-all duration-700 ${
-              (insight.pct ?? 0) < 30 ? 'bg-terracotta-400' :
-              (insight.pct ?? 0) < 60 ? 'bg-amber-400' : 'bg-sage-400'
-            }`}
-            style={{ width: `${Math.min(insight.pct ?? 0, 100)}%` }}
-          />
-        </div>
-        <p className="text-xs text-gray-500 mt-1">{insight.copy}</p>
-      </div>
-    )
-  }
 
   return (
     <div className={`rounded-2xl border p-4 ${cfg.bg} ${cfg.border}`}>
@@ -619,6 +571,11 @@ export default function InsightsPage() {
       }
 
       const nut = (log?.nutrient_totals as Record<string, number>) ?? {}
+      // Combined omega-3 total for the top-line summary bar/gap — ALA (plant)
+      // plus EPA+DHA (marine, stored in mg) converted to grams. Fish contains
+      // ~0 ALA, so the ALA-only figure showed 0% even after logging sardines;
+      // this rolls all three into one number against the same DRI reference.
+      nut.omega3_total_g = (nut.omega3_ala_g ?? 0) + ((nut.omega3_epa_mg ?? 0) + (nut.omega3_dha_mg ?? 0)) / 1000
       setNutrients(nut)
 
       // Fetch last 14 days for both nutrition and biofeedback (more data = better patterns)
@@ -649,6 +606,7 @@ export default function InsightsPage() {
         for (const k of Object.keys(avgNut)) {
           avgNut[k] = avgNut[k] / daysLogged
         }
+        avgNut.omega3_total_g = (avgNut.omega3_ala_g ?? 0) + ((avgNut.omega3_epa_mg ?? 0) + (avgNut.omega3_dha_mg ?? 0)) / 1000
         setAvg7Nutrients(avgNut)
         setAvg7DaysLogged(daysLogged)
         const sex = prof.sex ?? 'female'
@@ -736,9 +694,8 @@ export default function InsightsPage() {
     .sort((a, b) => a.pct - b.pct)
     .slice(0, 8)
 
-  const actionInsights = activeInsights.filter(i => i.type !== 'gap' && i.type !== 'win')
+  const actionInsights = activeInsights.filter(i => i.type !== 'win')
   const wins = activeInsights.filter(i => i.type === 'win')
-  const gaps = activeInsights.filter(i => i.type === 'gap')
 
   return (
     <div className="min-h-screen bg-cream-50">
@@ -818,18 +775,6 @@ export default function InsightsPage() {
                 <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2 px-1">Recommendations</p>
                 <div className="space-y-2.5">
                   {actionInsights.map(insight => (
-                    <InsightCard key={insight.id} insight={insight} />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Nutrient gaps */}
-            {gaps.length > 0 && (
-              <div className="mb-4">
-                <h2 className="text-sm font-semibold text-gray-700 mb-2 px-1">Nutrient gaps</h2>
-                <div className="space-y-2">
-                  {gaps.map(insight => (
                     <InsightCard key={insight.id} insight={insight} />
                   ))}
                 </div>
