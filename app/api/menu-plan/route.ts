@@ -36,7 +36,7 @@ export async function POST(request: NextRequest) {
 
     const { data: profile } = await supabase
       .from('profiles')
-      .select('daily_energy_target, energy_range_low, energy_range_high, sex')
+      .select('daily_energy_target, energy_range_low, energy_range_high, sex, weight_kg, protein_g_per_kg_low, protein_g_per_kg_high, fat_pct_low, fat_pct_high, carb_pct_low, carb_pct_high')
       .eq('id', user.id)
       .single()
 
@@ -49,6 +49,20 @@ export async function POST(request: NextRequest) {
     }
     const kcalLow = profile?.energy_range_low ?? target * 0.9
     const kcalHigh = profile?.energy_range_high ?? target * 1.1
+
+    // Macro target inputs -- user-configurable on the Profile page, with
+    // sensible defaults for anyone who hasn't set them yet. Protein is
+    // computed directly from bodyweight (g/kg), completely independent of
+    // the calorie range -- NOT as a % of calories -- per current
+    // sports-nutrition guidance. Fat and carb stay as a % of the calorie
+    // range since there's no equivalent bodyweight-based standard for them.
+    const weightKg = profile?.weight_kg ?? 65
+    const proteinPerKgLow = profile?.protein_g_per_kg_low ?? 1.8
+    const proteinPerKgHigh = profile?.protein_g_per_kg_high ?? 2.8
+    const fatPctLow = (profile?.fat_pct_low ?? 20) / 100
+    const fatPctHigh = (profile?.fat_pct_high ?? 30) / 100
+    const carbPctLow = (profile?.carb_pct_low ?? 45) / 100
+    const carbPctHigh = (profile?.carb_pct_high ?? 65) / 100
 
     // Resolve every food to per-100g macros using the same lookup waterfall
     // (staple overrides, branded USDA, Open Food Facts, generic USDA, GPT
@@ -69,17 +83,16 @@ export async function POST(request: NextRequest) {
     // density), not a manually maintained keyword list -- see planner.ts.
     const bounds: Bounds[] = foods.map(f => estimatePortionBounds(f.name, f.macros))
 
-    // Default macro split derived from the profile's own calorie range --
-    // there's no separate macro-target field on the profile yet, so this
-    // uses a standard evidence-based band (protein 25-35%, carb 35-50%,
-    // fat 25-35% of calories) rather than a single fixed ratio, which keeps
-    // it consistent with the calorie range already being a range and not
-    // a single number.
+    // Macro targets: protein comes straight from bodyweight (g/kg), carb
+    // and fat come from the profile's % of calories settings -- see
+    // Profile > Macro targets. All three are independent range constraints
+    // fed into the same solver as calories, so a plan can't satisfy the
+    // calorie target by, say, loading up on protein alone.
     const targets = {
       kcal: [kcalLow, kcalHigh] as [number, number],
-      protein: [(kcalLow * 0.25) / 4, (kcalHigh * 0.35) / 4] as [number, number],
-      carb: [(kcalLow * 0.35) / 4, (kcalHigh * 0.50) / 4] as [number, number],
-      fat: [(kcalLow * 0.25) / 9, (kcalHigh * 0.35) / 9] as [number, number],
+      protein: [weightKg * proteinPerKgLow, weightKg * proteinPerKgHigh] as [number, number],
+      carb: [(kcalLow * carbPctLow) / 4, (kcalHigh * carbPctHigh) / 4] as [number, number],
+      fat: [(kcalLow * fatPctLow) / 9, (kcalHigh * fatPctHigh) / 9] as [number, number],
     }
 
     const coeffsFor = (macro: keyof typeof foods[number]['macros']): number[] =>
