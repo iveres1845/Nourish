@@ -305,6 +305,17 @@ export default function ProfilePage() {
             <span className="text-4xl font-bold">{Math.round(energyHigh)}</span>
             <span className="text-sage-300 text-sm ml-1">kcal/day</span>
           </div>
+          <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+            <span className="text-[11px] text-white bg-white/15 px-2 py-1 rounded-full font-semibold">
+              P {Math.round(weightNum * (parseFloat(proteinPerKgLow) || 0))}–{Math.round(weightNum * (parseFloat(proteinPerKgHigh) || 0))}g
+            </span>
+            <span className="text-[11px] text-white bg-white/15 px-2 py-1 rounded-full font-semibold">
+              C {Math.round((energyLow * (parseFloat(carbPctLow) || 0)) / 100 / 4)}–{Math.round((energyHigh * (parseFloat(carbPctHigh) || 0)) / 100 / 4)}g
+            </span>
+            <span className="text-[11px] text-white bg-white/15 px-2 py-1 rounded-full font-semibold">
+              F {Math.round((energyLow * (parseFloat(fatPctLow) || 0)) / 100 / 9)}–{Math.round((energyHigh * (parseFloat(fatPctHigh) || 0)) / 100 / 9)}g
+            </span>
+          </div>
           <p className="text-sage-200 text-xs leading-relaxed">
             {Math.round(ffm)}kg fat-free mass · {dailyExerciseAvg > 0 ? `+${dailyExerciseAvg} kcal/day exercise` : 'no regular exercise'}
           </p>
