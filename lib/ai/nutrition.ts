@@ -363,6 +363,19 @@ export function applyPrepAdjustments(
  * Full pipeline: search → fetch nutrients → scale to portion → apply prep adjustment.
  * Returns min/max nutrient maps based on portion range.
  */
+/**
+ * Normalize butcher's "lean/fat" ratio shorthand (e.g. "90/10", "80/20
+ * ground beef") into the wording USDA's own food descriptions use ("90%
+ * lean"). FDC's text search doesn't handle the raw "NN/MM" notation well —
+ * a query like "90/10 beef" was returning no usable candidates even though
+ * the equivalent USDA record exists under "Beef, ground, 90% lean meat /
+ * 10% fat, raw". Only the first number is kept (the lean percentage), since
+ * that's the half that actually shows up in FDC's naming convention.
+ */
+function normalizeLeanFatRatio(name: string): string {
+  return name.replace(/\b(\d{1,3})\s*\/\s*\d{1,3}\b/, '$1% lean')
+}
+
 export async function lookupFoodNutrients(params: {
   name: string
   portion_g_min: number
@@ -375,8 +388,12 @@ export async function lookupFoodNutrients(params: {
   nutrients_mid: Record<string, number>
   source: 'branded' | 'generic'
 } | null> {
-  const { name, portion_g_min, portion_g_max, prep_method } = params
-  const normalizedName = name.trim().toLowerCase().replace(/\s+/g, ' ')
+  const { name: rawName, portion_g_min, portion_g_max, prep_method } = params
+  // Rewrite butcher's-ratio shorthand ("90/10 beef") into USDA's own wording
+  // ("90% lean beef") before it ever reaches search — see
+  // normalizeLeanFatRatio for why the raw "NN/MM" notation doesn't match.
+  const name = normalizeLeanFatRatio(rawName.trim())
+  const normalizedName = name.toLowerCase().replace(/\s+/g, ' ')
 
   // ── Step 0: Known-staple override — bypasses unreliable USDA text search ──
   const overrideFdcId = STAPLE_FOOD_OVERRIDES[normalizedName]
