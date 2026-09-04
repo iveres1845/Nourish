@@ -42,11 +42,26 @@ export default function PlanMenuPage() {
   const [issues, setIssues] = useState<string[] | null>(null)
   const [planned, setPlanned] = useState<PlannedFood[]>([])
   const [quantities, setQuantities] = useState<Record<number, number>>({})
+  // Text currently shown in each gram input while the user is typing --
+  // kept separate from `quantities` so the field can be fully cleared
+  // (backspaced to empty) without React snapping it back to the last valid
+  // number on every keystroke. Only reconciled into `quantities` (clamped
+  // to the food's min/max) on blur.
+  const [rawInputs, setRawInputs] = useState<Record<number, string>>({})
 
   function addFood(meal: MealType) {
-    const name = draft[meal].trim()
-    if (!name) return
-    setMealInputs(prev => ({ ...prev, [meal]: [...prev[meal], name] }))
+    const raw = draft[meal].trim()
+    if (!raw) return
+    // Users naturally type a whole list at once ("beef, egg, sourdough")
+    // rather than adding one food per Enter press. Split on commas, "and",
+    // ampersands, or semicolons so each food becomes its own chip/entry
+    // instead of one garbled combined name with a single weight.
+    const names = raw
+      .split(/,|\band\b|&|;/i)
+      .map(s => s.trim())
+      .filter(Boolean)
+    if (names.length === 0) return
+    setMealInputs(prev => ({ ...prev, [meal]: [...prev[meal], ...names] }))
     setDraft(prev => ({ ...prev, [meal]: '' }))
   }
 
@@ -93,6 +108,23 @@ export default function PlanMenuPage() {
 
   function setQuantity(index: number, grams: number) {
     setQuantities(prev => ({ ...prev, [index]: grams }))
+  }
+
+  // Called on blur: reconcile whatever text is in the field into a clamped
+  // number. If the field was left empty or invalid, fall back to the
+  // food's suggested amount rather than silently leaving a bad value.
+  function commitQuantity(index: number, food: PlannedFood) {
+    const text = rawInputs[index]
+    if (text !== undefined) {
+      const v = parseFloat(text)
+      const clamped = isNaN(v) ? food.suggested_g : Math.min(food.max_g, Math.max(food.min_g, v))
+      setQuantities(prev => ({ ...prev, [index]: clamped }))
+    }
+    setRawInputs(prev => {
+      const next = { ...prev }
+      delete next[index]
+      return next
+    })
   }
 
   // Live totals from current (possibly edited) quantities
@@ -282,13 +314,16 @@ export default function PlanMenuPage() {
                           <div className="flex items-center gap-1.5 flex-shrink-0">
                             <input
                               type="number"
-                              value={Math.round(grams)}
+                              value={rawInputs[i] ?? Math.round(grams)}
                               min={f.min_g}
                               max={f.max_g}
                               onChange={e => {
-                                const v = parseFloat(e.target.value)
-                                if (!isNaN(v)) setQuantity(i, Math.min(f.max_g, Math.max(f.min_g, v)))
+                                const text = e.target.value
+                                setRawInputs(prev => ({ ...prev, [i]: text }))
+                                const v = parseFloat(text)
+                                if (!isNaN(v)) setQuantity(i, v)
                               }}
+                              onBlur={() => commitQuantity(i, f)}
                               className="w-16 border border-sage-300 rounded-xl px-2 py-1.5 text-sm font-medium text-gray-800 text-right focus:outline-none focus:ring-2 focus:ring-sage-400"
                             />
                             <span className="text-xs text-gray-400">g</span>
