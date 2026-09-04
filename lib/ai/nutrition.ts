@@ -376,6 +376,36 @@ function normalizeLeanFatRatio(name: string): string {
   return name.replace(/\b(\d{1,3})\s*\/\s*\d{1,3}\b/, '$1% lean')
 }
 
+/**
+ * Map foreign/regional cheese names to the English words USDA's own FDC
+ * descriptions use, so text search actually finds the matching record.
+ * Confirmed live: "parmigiano" and "parmigiano reggiano" returned no usable
+ * candidates even though the equivalent record exists under "Cheese,
+ * parmesan" -- FDC indexes by the English name, not the Italian one.
+ * Checked as whole-word matches (not substrings) so this doesn't clobber
+ * unrelated names that happen to contain these words.
+ */
+const CHEESE_NAME_ALIASES: Record<string, string> = {
+  'parmigiano reggiano': 'parmesan',
+  'parmigiano-reggiano': 'parmesan',
+  'parmigiano': 'parmesan',
+  'grana padano': 'parmesan',
+  'pecorino romano': 'romano',
+  'pecorino': 'romano',
+  'mozzarella di bufala': 'mozzarella',
+  'fresh mozzarella': 'mozzarella',
+}
+
+function normalizeCheeseName(name: string): string {
+  const lower = name.toLowerCase()
+  for (const [alias, canonical] of Object.entries(CHEESE_NAME_ALIASES)) {
+    if (new RegExp(`\\b${alias}\\b`).test(lower)) {
+      return lower.replace(new RegExp(`\\b${alias}\\b`), canonical)
+    }
+  }
+  return name
+}
+
 export async function lookupFoodNutrients(params: {
   name: string
   portion_g_min: number
@@ -392,7 +422,7 @@ export async function lookupFoodNutrients(params: {
   // Rewrite butcher's-ratio shorthand ("90/10 beef") into USDA's own wording
   // ("90% lean beef") before it ever reaches search — see
   // normalizeLeanFatRatio for why the raw "NN/MM" notation doesn't match.
-  const name = normalizeLeanFatRatio(rawName.trim())
+  const name = normalizeCheeseName(normalizeLeanFatRatio(rawName.trim()))
   const normalizedName = name.toLowerCase().replace(/\s+/g, ' ')
 
   // ── Step 0: Known-staple override — bypasses unreliable USDA text search ──
