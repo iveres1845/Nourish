@@ -102,6 +102,16 @@ export default function ProfilePage() {
   const [sex, setSex]           = useState<'female' | 'male'>('female')
   const [age, setAge]           = useState('')
 
+  // Macro targets -- protein as g/kg bodyweight, fat/carb as % of calories.
+  // Defaults mirror the menu planner's fallback (1.8-2.8 g/kg, 20-30% fat,
+  // 45-65% carb) so a fresh profile and the planner always agree.
+  const [proteinPerKgLow, setProteinPerKgLow]   = useState('1.8')
+  const [proteinPerKgHigh, setProteinPerKgHigh] = useState('2.8')
+  const [fatPctLow, setFatPctLow]   = useState('20')
+  const [fatPctHigh, setFatPctHigh] = useState('30')
+  const [carbPctLow, setCarbPctLow]   = useState('45')
+  const [carbPctHigh, setCarbPctHigh] = useState('65')
+
   // Activity
   const [steps, setSteps]       = useState(7000)
   const [sessions, setSessions] = useState<ExerciseSession[]>([])
@@ -146,6 +156,12 @@ export default function ProfilePage() {
       setEnergyLow(prof.energy_range_low ?? 0)
       setEnergyHigh(prof.energy_range_high ?? 0)
       setFfm(prof.ffm_kg ?? 0)
+      setProteinPerKgLow(String(prof.protein_g_per_kg_low ?? 1.8))
+      setProteinPerKgHigh(String(prof.protein_g_per_kg_high ?? 2.8))
+      setFatPctLow(String(prof.fat_pct_low ?? 20))
+      setFatPctHigh(String(prof.fat_pct_high ?? 30))
+      setCarbPctLow(String(prof.carb_pct_low ?? 45))
+      setCarbPctHigh(String(prof.carb_pct_high ?? 65))
 
       // Restore exercise sessions from stored typical_week if available
       if (prof.typical_week_sessions) {
@@ -226,6 +242,12 @@ export default function ProfilePage() {
         daily_energy_target: ea.daily_energy_target,
         energy_range_low: ea.range_low,
         energy_range_high: ea.range_high,
+        protein_g_per_kg_low: parseFloat(proteinPerKgLow) || 1.8,
+        protein_g_per_kg_high: parseFloat(proteinPerKgHigh) || 2.8,
+        fat_pct_low: parseFloat(fatPctLow) || 20,
+        fat_pct_high: parseFloat(fatPctHigh) || 30,
+        carb_pct_low: parseFloat(carbPctLow) || 45,
+        carb_pct_high: parseFloat(carbPctHigh) || 65,
         updated_at: new Date().toISOString(),
       })
       .eq('id', user.id)
@@ -347,6 +369,74 @@ export default function ProfilePage() {
               className="w-full px-3 py-3 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-400"
               placeholder="30"
             />
+          </div>
+        </Section>
+
+        {/* Macro targets */}
+        <Section title="Macro targets">
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Protein (g / kg bodyweight)</label>
+              <span className="text-xs font-bold text-sage-700">
+                {Math.round(weightNum * (parseFloat(proteinPerKgLow) || 0))}–{Math.round(weightNum * (parseFloat(proteinPerKgHigh) || 0))}g
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <input
+                type="number" step="0.1" value={proteinPerKgLow} onChange={e => setProteinPerKgLow(e.target.value)}
+                className="w-full px-3 py-3 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-400"
+                placeholder="1.8"
+              />
+              <input
+                type="number" step="0.1" value={proteinPerKgHigh} onChange={e => setProteinPerKgHigh(e.target.value)}
+                className="w-full px-3 py-3 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-400"
+                placeholder="2.8"
+              />
+            </div>
+            <p className="text-xs text-gray-400 mt-1.5">Independent of calories -- based on your bodyweight, not your energy target</p>
+          </div>
+
+          <div className="border-t border-gray-50 pt-4">
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Fat (% of calories)</label>
+              <span className="text-xs font-bold text-sage-700">
+                {Math.round((energyLow * (parseFloat(fatPctLow) || 0)) / 100 / 9)}–{Math.round((energyHigh * (parseFloat(fatPctHigh) || 0)) / 100 / 9)}g
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <input
+                type="number" value={fatPctLow} onChange={e => setFatPctLow(e.target.value)}
+                className="w-full px-3 py-3 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-400"
+                placeholder="20"
+              />
+              <input
+                type="number" value={fatPctHigh} onChange={e => setFatPctHigh(e.target.value)}
+                className="w-full px-3 py-3 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-400"
+                placeholder="30"
+              />
+            </div>
+          </div>
+
+          <div className="border-t border-gray-50 pt-4">
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Carbohydrate (% of calories)</label>
+              <span className="text-xs font-bold text-sage-700">
+                {Math.round((energyLow * (parseFloat(carbPctLow) || 0)) / 100 / 4)}–{Math.round((energyHigh * (parseFloat(carbPctHigh) || 0)) / 100 / 4)}g
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <input
+                type="number" value={carbPctLow} onChange={e => setCarbPctLow(e.target.value)}
+                className="w-full px-3 py-3 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-400"
+                placeholder="45"
+              />
+              <input
+                type="number" value={carbPctHigh} onChange={e => setCarbPctHigh(e.target.value)}
+                className="w-full px-3 py-3 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-400"
+                placeholder="65"
+              />
+            </div>
+            <p className="text-xs text-gray-400 mt-1.5">These ranges feed the menu planner, so a plan can't lean on one macro just to hit calories</p>
           </div>
         </Section>
 
