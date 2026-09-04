@@ -58,99 +58,45 @@ export async function resolveFoodMacrosPer100g(name: string): Promise<PlannerMac
 }
 
 // --- Portion sanity bounds --------------------------------------------------
-// Keyword-classified [min, max] gram bounds per food category. Only the
-// MIN keeps a food from reading as an unrealistically tiny portion (e.g.
-// "5g of chicken"); there is no meaningful MAX anymore -- every category
-// shares MAX_BOUND, a single very high ceiling that exists purely so the
-// solver's box-constrained arithmetic has a finite number to work with,
-// not to cap how much of a food the solver can actually recommend. A
-// single food (sourdough, honey, whatever) can scale up to cover an
-// entire macro target on its own when it's the only source of that
-// macro -- the solver decides the real number, this file just gives it
-// room to do that.
+// Bounds are DERIVED from the food's own resolved nutrition profile instead
+// of a manually maintained keyword-to-category list. That means "sourdough"
+// vs "sourdough bread" vs "wonder bread", or "90/10 beef" vs "lean ground
+// beef" vs "ribeye", all get sensible bounds automatically -- there's no
+// keyword list to keep extending by hand every time a new food or phrasing
+// shows up.
 //
-// Matching is substring-based on the lowercased food name, so variant
-// phrasings of the same food (e.g. "90/10 beef", "lean ground beef") match
-// automatically as long as they share the core keyword ("beef"). Add
-// alternate spellings/names to a category's keyword list (e.g. "sourdough"
-// alongside "bread") to fold them into the same bounds rather than falling
-// through to DEFAULT_BOUNDS. Checked in order -- first match wins -- so
-// more specific overrides (e.g. "egg") should come before broader
-// categories.
-
-type BoundRule = { keywords: string[]; min: number }
+// MIN is calculated from calorie density: a calorie-dense food (oil, honey,
+// nut butter) gets a small floor because even a small gram amount is
+// nutritionally meaningful, while a calorie-sparse food (leafy greens,
+// broth) gets a larger floor -- capped at MAX_FLOOR_G so watery vegetables
+// don't get pushed to an absurd minimum. This replaces per-category minimums
+// with one formula that works for any food, known or not.
+//
+// MAX is a single high ceiling shared by everything -- it exists purely so
+// the solver's box-constrained arithmetic has a finite number to work with,
+// not to cap how much of a food the solver can actually recommend. A single
+// food can scale up to cover an entire macro target on its own when it's
+// the only source of that macro -- the solver decides the real number.
+//
+// The one deliberate exception is eggs: they're bought and eaten as whole
+// units, so a calorie-density floor would let the solver suggest something
+// like "12g of egg" -- numerically fine, but it reads as broken. Keeping a
+// single explicit override for that one count-like case is simpler than
+// trying to generalize "sold in discrete units" into the formula.
 
 const MAX_BOUND = 2000
+const TARGET_FLOOR_KCAL = 15
+const MIN_FLOOR_G = 5
+const MAX_FLOOR_G = 60
+const EGG_BOUNDS: [number, number] = [40, MAX_BOUND]
 
-const BOUND_RULES: BoundRule[] = [
-    // Small, count-like items
-  { keywords: ['egg', 'eggs'], min: 40 },
+export function estimatePortionBounds(name: string, macros: PlannerMacros): [number, number] {
+    if (name.toLowerCase().includes('egg')) return EGG_BOUNDS
 
-    // Condiments, spreads, oils -- still start small, but can act as a real
-    // carb/fat source when it's the only one (e.g. honey as the sole carb
-    // source in a meal)
-  { keywords: [
-        'jam', 'jelly', 'honey', 'syrup', 'butter', 'peanut butter', 'almond butter',
-        'nut butter', 'mayo', 'mayonnaise', 'dressing', 'oil', 'olive oil', 'sauce',
-        'ketchup', 'mustard', 'hummus', 'nutella',
-      ], min: 5 },
+  const kcalPerGram = macros.energy_kcal / 100
+    if (!(kcalPerGram > 0)) return [MAX_FLOOR_G, MAX_BOUND]
 
-    // Nuts, seeds
-  { keywords: ['nuts', 'almonds', 'walnuts', 'cashews', 'peanuts', 'pistachios', 'seeds', 'chia', 'flaxseed'],
-      min: 10 },
-
-    // Protein powders / bars
-  { keywords: ['protein powder', 'whey', 'casein', 'protein bar'], min: 20 },
-
-    // Cheese
-  { keywords: ['cheese'], min: 10 },
-
-    // Dairy (milk, yogurt)
-  { keywords: ['milk', 'yogurt', 'yoghurt', 'kefir'], min: 50 },
-
-    // Bread / wraps -- includes alternate names like "sourdough" on its own
-    // (not just "sourdough bread") so they share bounds with the rest of
-    // the category instead of falling through to the default
-  { keywords: [
-        'bread', 'toast', 'tortilla', 'wrap', 'pita', 'bagel', 'bun', 'sourdough',
-        'baguette', 'ciabatta', 'rye bread', 'ryebread', 'brioche',
-      ], min: 20 },
-
-    // Animal protein mains -- covers phrasing variants ("90/10 beef",
-    // "lean ground beef", "ground turkey") via the shared core keyword
-  { keywords: [
-        'chicken', 'beef', 'steak', 'pork', 'lamb', 'turkey', 'duck', 'bacon',
-        'salmon', 'tuna', 'cod', 'tilapia', 'shrimp', 'prawn', 'fish', 'sardine',
-        'tofu', 'tempeh', 'seitan',
-      ], min: 50 },
-
-    // Grains / starches / legumes
-  { keywords: [
-        'rice', 'pasta', 'noodles', 'quinoa', 'oats', 'oatmeal', 'barley', 'couscous',
-        'potato', 'potatoes', 'sweet potato', 'gnocchi', 'lentils', 'chickpeas', 'beans',
-      ], min: 30 },
-
-    // Fruit
-  { keywords: [
-        'fruit', 'apple', 'banana', 'orange', 'grape', 'strawberry', 'blueberry',
-        'mango', 'pear', 'peach', 'plum', 'cherry', 'kiwi', 'melon', 'watermelon',
-        'pineapple', 'berries',
-      ], min: 50 },
-
-    // Vegetables
-  { keywords: [
-        'vegetable', 'broccoli', 'asparagus', 'spinach', 'kale', 'carrot', 'onion',
-        'zucchini', 'cucumber', 'celery', 'lettuce', 'cabbage', 'cauliflower',
-        'mushroom', 'peas', 'salad', 'tomato', 'pepper',
-      ], min: 30 },
-]
-
-const DEFAULT_MIN = 20
-
-export function estimatePortionBounds(name: string): [number, number] {
-    const lower = name.toLowerCase()
-    for (const rule of BOUND_RULES) {
-          if (rule.keywords.some(k => lower.includes(k))) return [rule.min, MAX_BOUND]
-    }
-    return [DEFAULT_MIN, MAX_BOUND]
+  const rawMin = TARGET_FLOOR_KCAL / kcalPerGram
+    const min = Math.round(Math.min(MAX_FLOOR_G, Math.max(MIN_FLOOR_G, rawMin)))
+    return [min, MAX_BOUND]
 }
