@@ -58,81 +58,99 @@ export async function resolveFoodMacrosPer100g(name: string): Promise<PlannerMac
 }
 
 // --- Portion sanity bounds --------------------------------------------------
-// Keyword-classified [min, max] gram bounds per food category, used so the
-// solver's output ranges stay realistic (e.g. never "5g of chicken") while
-// still leaving enough headroom that a single food CAN scale up to cover a
-// whole macro target on its own -- e.g. if sourdough is the only carb source
-// in a meal, the solver should be able to land on 200g+ sourdough rather than
-// declaring the plan infeasible against an artificially low ceiling. Checked
-// in order -- first match wins -- so more specific overrides (e.g. "egg")
-// should come before broader categories.
+// Keyword-classified [min, max] gram bounds per food category. Only the
+// MIN keeps a food from reading as an unrealistically tiny portion (e.g.
+// "5g of chicken"); there is no meaningful MAX anymore -- every category
+// shares MAX_BOUND, a single very high ceiling that exists purely so the
+// solver's box-constrained arithmetic has a finite number to work with,
+// not to cap how much of a food the solver can actually recommend. A
+// single food (sourdough, honey, whatever) can scale up to cover an
+// entire macro target on its own when it's the only source of that
+// macro -- the solver decides the real number, this file just gives it
+// room to do that.
+//
+// Matching is substring-based on the lowercased food name, so variant
+// phrasings of the same food (e.g. "90/10 beef", "lean ground beef") match
+// automatically as long as they share the core keyword ("beef"). Add
+// alternate spellings/names to a category's keyword list (e.g. "sourdough"
+// alongside "bread") to fold them into the same bounds rather than falling
+// through to DEFAULT_BOUNDS. Checked in order -- first match wins -- so
+// more specific overrides (e.g. "egg") should come before broader
+// categories.
 
-type BoundRule = { keywords: string[]; bounds: [number, number] }
+type BoundRule = { keywords: string[]; min: number }
+
+const MAX_BOUND = 2000
 
 const BOUND_RULES: BoundRule[] = [
     // Small, count-like items
-  { keywords: ['egg', 'eggs'], bounds: [40, 200] },
+  { keywords: ['egg', 'eggs'], min: 40 },
 
-    // Condiments, spreads, oils -- still capped well below mains, but with
-    // enough room to act as a real carb/fat source when it's the only one
-    // (e.g. honey as the sole carb source in a meal)
+    // Condiments, spreads, oils -- still start small, but can act as a real
+    // carb/fat source when it's the only one (e.g. honey as the sole carb
+    // source in a meal)
   { keywords: [
-          'jam', 'jelly', 'honey', 'syrup', 'butter', 'peanut butter', 'almond butter',
-          'nut butter', 'mayo', 'mayonnaise', 'dressing', 'oil', 'olive oil', 'sauce',
-          'ketchup', 'mustard', 'hummus', 'nutella',
-        ], bounds: [5, 150] },
+        'jam', 'jelly', 'honey', 'syrup', 'butter', 'peanut butter', 'almond butter',
+        'nut butter', 'mayo', 'mayonnaise', 'dressing', 'oil', 'olive oil', 'sauce',
+        'ketchup', 'mustard', 'hummus', 'nutella',
+      ], min: 5 },
 
-    // Nuts, seeds -- energy-dense, but can scale past a "handful" if needed
+    // Nuts, seeds
   { keywords: ['nuts', 'almonds', 'walnuts', 'cashews', 'peanuts', 'pistachios', 'seeds', 'chia', 'flaxseed'],
-       bounds: [10, 120] },
+      min: 10 },
 
     // Protein powders / bars
-  { keywords: ['protein powder', 'whey', 'casein', 'protein bar'], bounds: [20, 100] },
+  { keywords: ['protein powder', 'whey', 'casein', 'protein bar'], min: 20 },
 
-    // Cheese -- dense, but allow more room than a garnish-only amount
-  { keywords: ['cheese'], bounds: [10, 200] },
+    // Cheese
+  { keywords: ['cheese'], min: 10 },
 
     // Dairy (milk, yogurt)
-  { keywords: ['milk', 'yogurt', 'yoghurt', 'kefir'], bounds: [50, 500] },
+  { keywords: ['milk', 'yogurt', 'yoghurt', 'kefir'], min: 50 },
 
-    // Bread / wraps -- count-like, but with enough headroom to be a meal's
-    // only carb source (e.g. 200g+ sourdough) rather than capped at ~3 slices
-  { keywords: ['bread', 'toast', 'tortilla', 'wrap', 'pita', 'bagel', 'bun'], bounds: [20, 400] },
-
-    // Animal protein mains
+    // Bread / wraps -- includes alternate names like "sourdough" on its own
+    // (not just "sourdough bread") so they share bounds with the rest of
+    // the category instead of falling through to the default
   { keywords: [
-          'chicken', 'beef', 'steak', 'pork', 'lamb', 'turkey', 'duck', 'bacon',
-          'salmon', 'tuna', 'cod', 'tilapia', 'shrimp', 'prawn', 'fish', 'sardine',
-          'tofu', 'tempeh', 'seitan',
-        ], bounds: [50, 400] },
+        'bread', 'toast', 'tortilla', 'wrap', 'pita', 'bagel', 'bun', 'sourdough',
+        'baguette', 'ciabatta', 'rye bread', 'ryebread', 'brioche',
+      ], min: 20 },
+
+    // Animal protein mains -- covers phrasing variants ("90/10 beef",
+    // "lean ground beef", "ground turkey") via the shared core keyword
+  { keywords: [
+        'chicken', 'beef', 'steak', 'pork', 'lamb', 'turkey', 'duck', 'bacon',
+        'salmon', 'tuna', 'cod', 'tilapia', 'shrimp', 'prawn', 'fish', 'sardine',
+        'tofu', 'tempeh', 'seitan',
+      ], min: 50 },
 
     // Grains / starches / legumes
   { keywords: [
-          'rice', 'pasta', 'noodles', 'quinoa', 'oats', 'oatmeal', 'barley', 'couscous',
-          'potato', 'potatoes', 'sweet potato', 'gnocchi', 'lentils', 'chickpeas', 'beans',
-        ], bounds: [30, 500] },
+        'rice', 'pasta', 'noodles', 'quinoa', 'oats', 'oatmeal', 'barley', 'couscous',
+        'potato', 'potatoes', 'sweet potato', 'gnocchi', 'lentils', 'chickpeas', 'beans',
+      ], min: 30 },
 
     // Fruit
   { keywords: [
-          'fruit', 'apple', 'banana', 'orange', 'grape', 'strawberry', 'blueberry',
-          'mango', 'pear', 'peach', 'plum', 'cherry', 'kiwi', 'melon', 'watermelon',
-          'pineapple', 'berries',
-        ], bounds: [50, 400] },
+        'fruit', 'apple', 'banana', 'orange', 'grape', 'strawberry', 'blueberry',
+        'mango', 'pear', 'peach', 'plum', 'cherry', 'kiwi', 'melon', 'watermelon',
+        'pineapple', 'berries',
+      ], min: 50 },
 
     // Vegetables
   { keywords: [
-          'vegetable', 'broccoli', 'asparagus', 'spinach', 'kale', 'carrot', 'onion',
-          'zucchini', 'cucumber', 'celery', 'lettuce', 'cabbage', 'cauliflower',
-          'mushroom', 'peas', 'salad', 'tomato', 'pepper',
-        ], bounds: [30, 500] },
-  ]
+        'vegetable', 'broccoli', 'asparagus', 'spinach', 'kale', 'carrot', 'onion',
+        'zucchini', 'cucumber', 'celery', 'lettuce', 'cabbage', 'cauliflower',
+        'mushroom', 'peas', 'salad', 'tomato', 'pepper',
+      ], min: 30 },
+]
 
-const DEFAULT_BOUNDS: [number, number] = [20, 400]
+const DEFAULT_MIN = 20
 
 export function estimatePortionBounds(name: string): [number, number] {
     const lower = name.toLowerCase()
     for (const rule of BOUND_RULES) {
-          if (rule.keywords.some(k => lower.includes(k))) return rule.bounds
+          if (rule.keywords.some(k => lower.includes(k))) return [rule.min, MAX_BOUND]
     }
-    return DEFAULT_BOUNDS
+    return [DEFAULT_MIN, MAX_BOUND]
 }
