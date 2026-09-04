@@ -59,69 +59,75 @@ export async function resolveFoodMacrosPer100g(name: string): Promise<PlannerMac
 
 // --- Portion sanity bounds --------------------------------------------------
 // Keyword-classified [min, max] gram bounds per food category, used so the
-// solver's output ranges stay realistic (e.g. never "5g of chicken" or
-// "500g of jam") instead of only being constrained by the macro targets.
-// Checked in order -- first match wins -- so more specific overrides (e.g.
-// "egg") should come before broader categories.
+// solver's output ranges stay realistic (e.g. never "5g of chicken") while
+// still leaving enough headroom that a single food CAN scale up to cover a
+// whole macro target on its own -- e.g. if sourdough is the only carb source
+// in a meal, the solver should be able to land on 200g+ sourdough rather than
+// declaring the plan infeasible against an artificially low ceiling. Checked
+// in order -- first match wins -- so more specific overrides (e.g. "egg")
+// should come before broader categories.
 
 type BoundRule = { keywords: string[]; bounds: [number, number] }
 
 const BOUND_RULES: BoundRule[] = [
     // Small, count-like items
-  { keywords: ['egg', 'eggs'], bounds: [40, 150] },
+  { keywords: ['egg', 'eggs'], bounds: [40, 200] },
 
-    // Condiments, spreads, oils -- small quantities even at generous portions
+    // Condiments, spreads, oils -- still capped well below mains, but with
+    // enough room to act as a real carb/fat source when it's the only one
+    // (e.g. honey as the sole carb source in a meal)
   { keywords: [
           'jam', 'jelly', 'honey', 'syrup', 'butter', 'peanut butter', 'almond butter',
           'nut butter', 'mayo', 'mayonnaise', 'dressing', 'oil', 'olive oil', 'sauce',
           'ketchup', 'mustard', 'hummus', 'nutella',
-        ], bounds: [5, 50] },
+        ], bounds: [5, 150] },
 
-    // Nuts, seeds -- energy-dense, eaten in small handfuls
+    // Nuts, seeds -- energy-dense, but can scale past a "handful" if needed
   { keywords: ['nuts', 'almonds', 'walnuts', 'cashews', 'peanuts', 'pistachios', 'seeds', 'chia', 'flaxseed'],
-       bounds: [10, 60] },
+       bounds: [10, 120] },
 
     // Protein powders / bars
-  { keywords: ['protein powder', 'whey', 'casein', 'protein bar'], bounds: [20, 60] },
+  { keywords: ['protein powder', 'whey', 'casein', 'protein bar'], bounds: [20, 100] },
 
-    // Cheese -- dense, eaten in smaller amounts than other dairy
-  { keywords: ['cheese'], bounds: [10, 120] },
+    // Cheese -- dense, but allow more room than a garnish-only amount
+  { keywords: ['cheese'], bounds: [10, 200] },
 
     // Dairy (milk, yogurt)
-  { keywords: ['milk', 'yogurt', 'yoghurt', 'kefir'], bounds: [50, 400] },
+  { keywords: ['milk', 'yogurt', 'yoghurt', 'kefir'], bounds: [50, 500] },
 
-    // Bread / wraps -- count-like, capped lower than loose grains
-  { keywords: ['bread', 'toast', 'tortilla', 'wrap', 'pita', 'bagel', 'bun'], bounds: [20, 150] },
+    // Bread / wraps -- count-like, but with enough headroom to be a meal's
+    // only carb source (e.g. 200g+ sourdough) rather than capped at ~3 slices
+  { keywords: ['bread', 'toast', 'tortilla', 'wrap', 'pita', 'bagel', 'bun'], bounds: [20, 400] },
 
     // Animal protein mains
   { keywords: [
           'chicken', 'beef', 'steak', 'pork', 'lamb', 'turkey', 'duck', 'bacon',
           'salmon', 'tuna', 'cod', 'tilapia', 'shrimp', 'prawn', 'fish', 'sardine',
           'tofu', 'tempeh', 'seitan',
-        ], bounds: [50, 300] },
+        ], bounds: [50, 400] },
 
     // Grains / starches / legumes
   { keywords: [
           'rice', 'pasta', 'noodles', 'quinoa', 'oats', 'oatmeal', 'barley', 'couscous',
           'potato', 'potatoes', 'sweet potato', 'gnocchi', 'lentils', 'chickpeas', 'beans',
-        ], bounds: [30, 350] },
+        ], bounds: [30, 500] },
 
     // Fruit
   { keywords: [
           'fruit', 'apple', 'banana', 'orange', 'grape', 'strawberry', 'blueberry',
           'mango', 'pear', 'peach', 'plum', 'cherry', 'kiwi', 'melon', 'watermelon',
           'pineapple', 'berries',
-        ], bounds: [50, 300] },
+        ], bounds: [50, 400] },
 
     // Vegetables
   { keywords: [
           'vegetable', 'broccoli', 'asparagus', 'spinach', 'kale', 'carrot', 'onion',
           'zucchini', 'cucumber', 'celery', 'lettuce', 'cabbage', 'cauliflower',
           'mushroom', 'peas', 'salad', 'tomato', 'pepper',
-        ], bounds: [30, 350] },
+        ], bounds: [30, 500] },
   ]
 
-const DEFAULT_BOUNDS: [number, number] = [20, 300]
+const DEFAULT_BOUNDS: [number, number] = [20, 400]
 
 export function estimatePortionBounds(name: string): [number, number] {
     const lower = name.toLowerCase()
