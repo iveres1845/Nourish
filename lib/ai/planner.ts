@@ -4,13 +4,20 @@
  * solver doesn't propose things like "600g of jam".
  */
 
-import { lookupFoodNutrients } from './nutrition'
+import { lookupFoodNutrients, getServingSizeG } from './nutrition'
 
 export type PlannerMacros = {
     energy_kcal: number
     protein_g: number
     fat_g: number
     carbohydrate_g: number
+    // A real-world "standard serving" in grams, pulled from USDA's own
+    // household-measure data when available (see getServingSizeG). Used to
+    // round the menu planner's suggested portion to something that reads
+    // like an actual serving instead of a raw solver output. Undefined when
+    // the food came from a source without portion data (branded/Open Food
+    // Facts matches, or a USDA record with none listed).
+    serving_g?: number
 }
 
 /**
@@ -49,11 +56,18 @@ export async function resolveFoodMacrosPer100g(name: string): Promise<PlannerMac
           return null
     }
 
+  // Only USDA-matched foods (source === 'generic') have a real fdcId to
+  // look up a serving size for -- branded/Open Food Facts matches don't
+  // carry FDC portion data, so they fall back to the calorie-density
+  // formula in the planner route instead.
+  const serving_g = result.fdcId ? await getServingSizeG(result.fdcId) ?? undefined : undefined
+
   return {
         energy_kcal: n.energy_kcal,
         protein_g: n.protein_g,
         fat_g: n.fat_g,
         carbohydrate_g: n.carbohydrate_g,
+        serving_g,
   }
 }
 
