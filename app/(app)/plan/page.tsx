@@ -15,7 +15,7 @@ const MEAL_LABELS: Record<MealType, string> = {
 type PlannedFood = {
   name: string
   meal: string
-  per100g: { energy_kcal: number; protein_g: number; fat_g: number; carbohydrate_g: number }
+  per100g: Record<string, number>
   min_g: number
   max_g: number
   suggested_g: number
@@ -218,11 +218,10 @@ export default function PlanMenuPage() {
   function buildFoodRow(f: PlannedFood, grams: number) {
     const factor = grams / 100
     const round = (v: number) => Math.round(v * factor * 100) / 100
-    const nutrients = {
-      energy_kcal: round(f.per100g.energy_kcal),
-      protein_g: round(f.per100g.protein_g),
-      fat_g: round(f.per100g.fat_g),
-      carbohydrate_g: round(f.per100g.carbohydrate_g),
+    const nutrients: Record<string, number> = {}
+    for (const [key, val] of Object.entries(f.per100g)) {
+      if (key === 'serving_g') continue
+      if (typeof val === 'number') nutrients[key] = round(val)
     }
     return {
       name: f.name,
