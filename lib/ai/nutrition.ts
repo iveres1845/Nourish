@@ -52,6 +52,12 @@ interface FDCFood {
   description: string
   dataType: string
   brandName?: string
+  foodPortions?: Array<{
+    gramWeight: number
+    amount?: number
+    modifier?: string
+    measureUnit?: { name: string }
+  }>
   foodNutrients: Array<{
     // Foundation / SR Legacy foods use nested structure
     nutrient?: { id: number; name: string; unitName: string }
@@ -235,6 +241,44 @@ export async function getFoodNutrients(fdcId: number): Promise<Record<string, nu
 }
 
 /**
+ * Fetch a real-world "standard serving" gram weight for a food, straight
+ * from USDA's own household-measure data (foodPortions) instead of
+ * inventing one. Used by the menu planner to round its suggested portions
+ * to something that reads like an actual serving ("2 slices", "1 medium
+ * fruit") rather than a raw solver output like "137g".
+ *
+ * Preference order:
+ *   1. The FDA's own "NLEA serving" -- the reference amount used on the
+ *      Nutrition Facts label, the closest thing to a universal "one
+ *      serving" that exists across food types.
+ *   2. The median of whatever household measures ARE listed, which is a
+ *      reasonable single-unit estimate without letting one outlier (e.g.
+ *      "1 cup, mashed" for a fruit normally eaten whole) skew the pick.
+ * Returns null if the food has no portion data at all (some Foundation
+ * records don't) -- callers should fall back to a formula-based estimate.
+ */
+export async function getServingSizeG(fdcId: number): Promise<number | null> {
+  try {
+    const url = `${FDC_BASE}/food/${fdcId}?api_key=${process.env.USDA_FDC_API_KEY}`
+    const res = await fetch(url)
+    if (!res.ok) return null
+
+    const data = (await res.json()) as FDCFood
+    const portions = (data.foodPortions ?? []).filter(p => p.gramWeight > 0)
+    if (portions.length === 0) return null
+
+    const nlea = portions.find(p => p.modifier?.toLowerCase().includes('nlea serving'))
+    if (nlea) return nlea.gramWeight
+
+    const weights = portions.map(p => p.gramWeight).sort((a, b) => a - b)
+    return weights[Math.floor(weights.length / 2)]
+  } catch (err) {
+    console.warn(`FDC serving-size fetch error for fdcId ${fdcId}:`, err)
+    return null
+  }
+}
+
+/**
  * A USDA record is only usable if it has a complete macro profile.
  * Some Foundation/SR Legacy records report energy but are missing one or more
  * of protein/fat/carbohydrate (e.g. a derived "carbohydrate, by difference"
@@ -406,6 +450,35 @@ function normalizeCheeseName(name: string): string {
   return name
 }
 
+/**
+ * Words that mark a USDA record as a processed/concentrated FORM of a food
+ * rather than the whole/fresh version -- e.g. "Bananas, dehydrated, or
+ * banana powder" outranking "Bananas, raw" for a plain "banana" query.
+ * Confirmed live: FDC's relevance search puts the dehydrated record first
+ * (score 376 vs raw's lower score), so a bare "130g banana" was coming back
+ * as ~450 kcal (dehydrated is ~346 kcal/100g) instead of the correct ~115
+ * kcal (raw is ~89 kcal/100g) -- nearly 4x too high.
+ */
+const PROCESSED_FORM_KEYWORDS = [
+  'dehydrated', 'powder', 'dried', 'chips', 'flour', 'juice',
+  'concentrate', 'extract', 'syrup', 'crystals', 'flakes', 'freeze-dried',
+]
+
+/**
+ * Push processed-form candidates (see above) to the back of the candidate
+ * list, unless the query itself asked for that form -- "banana chips"
+ * should still be able to match "Banana chips". Otherwise-equal ordering
+ * (FDC's own relevance rank) is preserved within each group.
+ */
+function preferWholeForm<T extends { description: string }>(queryName: string, candidates: T[]): T[] {
+  const queryLower = queryName.toLowerCase()
+  if (PROCESSED_FORM_KEYWORDS.some(k => queryLower.includes(k))) return candidates
+  const isProcessed = (c: T) => PROCESSED_FORM_KEYWORDS.some(k => c.description.toLowerCase().includes(k))
+  const whole = candidates.filter(c => !isProcessed(c))
+  const processed = candidates.filter(isProcessed)
+  return [...whole, ...processed]
+}
+
 export async function lookupFoodNutrients(params: {
   name: string
   portion_g_min: number
@@ -489,8 +562,9 @@ export async function lookupFoodNutrients(params: {
   }
 
   // ── Step 2: Generic USDA search (Foundation / SR Legacy) ──────────────────
-  const candidates = await searchFood(name)
-  if (candidates.length === 0) return null
+  const rawCandidates = await searchFood(name)
+  if (rawCandidates.length === 0) return null
+  const candidates = preferWholeForm(name, rawCandidates)
 
   for (const candidate of candidates) {
     // Reject candidates whose primary food category doesn't plausibly match
