@@ -141,13 +141,16 @@ export async function POST(request: NextRequest) {
     const planned = foods.map((f, i) => {
       const range = findRange(bounds, constraints, i)
       const round5 = (v: number) => Math.max(1, Math.round(v / 5) * 5)
+      const min_g = range ? round5(range.min) : round5(bounds[i][0])
+      const max_g = range ? round5(range.max) : round5(bounds[i][1])
+      const rawSuggested = range ? range.suggested : (bounds[i][0] + bounds[i][1]) / 2
       return {
         name: f.name,
         meal: f.meal,
         per100g: f.macros,
-        min_g: range ? round5(range.min) : round5(bounds[i][0]),
-        max_g: range ? round5(range.max) : round5(bounds[i][1]),
-        suggested_g: range ? round5(range.suggested) : round5((bounds[i][0] + bounds[i][1]) / 2),
+        min_g,
+        max_g,
+        suggested_g: snapToServing(rawSuggested, f.macros.serving_g, min_g, max_g),
       }
     })
 
@@ -156,6 +159,44 @@ export async function POST(request: NextRequest) {
     console.error('[/api/menu-plan]', error)
     return NextResponse.json({ error: 'Planning failed. Please try again.' }, { status: 500 })
   }
+}
+
+/**
+ * Round the solver's raw suggested portion to the nearest whole- or
+ * half-serving of the food's real-world standard serving size (see
+ * getServingSizeG in nutrition.ts), so a suggestion reads like "2 slices"
+ * or "1 medium fruit" instead of an arbitrary "137g". Falls back to a
+ * plain nearest-5g rounding when the food has no known serving size, or
+ * when no clean multiple fits inside the macro-feasible [min_g, max_g]
+ * window the solver already computed -- staying inside that window matters
+ * more than landing on a round number.
+ */
+function snapToServing(rawSuggested: number, servingG: number | undefined, min_g: number, max_g: number): number {
+  const round5 = (v: number) => Math.max(1, Math.round(v / 5) * 5)
+  if (!servingG || servingG <= 0) return round5(rawSuggested)
+
+  const rawMultiple = rawSuggested / servingG
+  const nearestHalf = (n: number) => Math.round(n * 2) / 2
+
+  let multiple = nearestHalf(rawMultiple)
+  if (multiple <= 0) multiple = 0.5
+  let candidate = round5(multiple * servingG)
+
+  if (candidate >= min_g && candidate <= max_g) return candidate
+
+  // The nearest whole/half multiple overshoots or undershoots the feasible
+  // window -- walk to whichever in-range multiple is closest to the raw
+  // suggestion instead of abandoning servings entirely.
+  const minMultiple = Math.ceil((min_g / servingG) * 2) / 2
+  const maxMultiple = Math.floor((max_g / servingG) * 2) / 2
+  if (minMultiple <= maxMultiple) {
+    multiple = Math.abs(minMultiple - rawMultiple) <= Math.abs(maxMultiple - rawMultiple) ? minMultiple : maxMultiple
+    return round5(multiple * servingG)
+  }
+
+  // No multiple of the serving size fits inside the window at all (a
+  // narrow feasible range smaller than one serving) -- just clamp.
+  return round5(Math.min(max_g, Math.max(min_g, rawSuggested)))
 }
 
 function suggestionFor(label: string | undefined): string {
