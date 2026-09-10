@@ -190,92 +190,106 @@ function looksLikeBrandedFood(name: string): boolean {
  * Fetch full nutrient data for a food by fdcId.
  * Returns empty object if the food record is unavailable (404 / API error).
  */
-export async function getFoodNutrients(fdcId: number): Promise<Record<string, number>> {
+/**
+ * Single raw fetch of a food's full FDC detail record. Both nutrient
+ * extraction and serving-size extraction read from this same response --
+ * see getFoodNutrients and getFoodDetail below -- so resolving one food
+ * never costs more than one HTTP round-trip to USDA.
+ */
+async function fetchFdcFood(fdcId: number): Promise<FDCFood | null> {
   try {
     const url = `${FDC_BASE}/food/${fdcId}?api_key=${process.env.USDA_FDC_API_KEY}`
     const res = await fetch(url)
     if (!res.ok) {
       console.warn(`FDC food fetch failed for fdcId ${fdcId}: ${res.status} — skipping`)
-      return {}
+      return null
     }
-
-    const data = (await res.json()) as FDCFood
-    const result: Record<string, number> = {}
-
-    for (const [key, nutrientId] of Object.entries(NUTRIENT_ID_MAP)) {
-      // FDC Foundation/SR Legacy: { nutrient: { id }, amount }
-      // FDC Branded: { nutrientId, value }
-      // Energy can appear under ID 1008 (Atwater general) OR 2047 (Atwater specific)
-      const altEnergyId = key === 'energy_kcal' ? 2047 : null
-
-      const nutrient = data.foodNutrients.find((n) =>
-        (n.nutrient?.id === nutrientId) || (n.nutrientId === nutrientId) ||
-        (altEnergyId !== null && ((n.nutrient?.id === altEnergyId) || (n.nutrientId === altEnergyId)))
-      )
-      if (nutrient) {
-        const val = nutrient.amount ?? nutrient.value
-        if (val !== undefined) {
-          // FDC reports EPA/DHA (nutrient IDs 1278/1272) in grams, like other
-          // fatty acids — but our key names (and the rest of the app) treat
-          // omega3_epa_mg/omega3_dha_mg as milligrams. Without this conversion,
-          // logged fish showed EPA/DHA ~1000x too small (e.g. sardines'
-          // 0.473g EPA/100g stored as "0.473mg", rounding away to ~nothing).
-          const isGramsReportedAsMg = key === 'omega3_epa_mg' || key === 'omega3_dha_mg'
-          result[key] = isGramsReportedAsMg ? val * 1000 : val  // per 100g
-        }
-      }
-    }
-
-    // Sanity check: energy > 9 kcal/g is physically impossible (pure fat = ~9 kcal/g)
-    // If we see this, the record is likely reporting per-serving not per-100g — discard it
-    if (result.energy_kcal && result.energy_kcal > 900) {
-      console.warn(`FDC fdcId ${fdcId} returned suspicious energy ${result.energy_kcal} kcal/100g — discarding`)
-      return {}
-    }
-
-    return result  // per 100g
+    return (await res.json()) as FDCFood
   } catch (err) {
     console.warn(`FDC fetch error for fdcId ${fdcId}:`, err)
-    return {}
+    return null
   }
 }
 
-/**
- * Fetch a real-world "standard serving" gram weight for a food, straight
- * from USDA's own household-measure data (foodPortions) instead of
- * inventing one. Used by the menu planner to round its suggested portions
- * to something that reads like an actual serving ("2 slices", "1 medium
- * fruit") rather than a raw solver output like "137g".
- *
- * Preference order:
- *   1. The FDA's own "NLEA serving" -- the reference amount used on the
- *      Nutrition Facts label, the closest thing to a universal "one
- *      serving" that exists across food types.
- *   2. The median of whatever household measures ARE listed, which is a
- *      reasonable single-unit estimate without letting one outlier (e.g.
- *      "1 cup, mashed" for a fruit normally eaten whole) skew the pick.
- * Returns null if the food has no portion data at all (some Foundation
- * records don't) -- callers should fall back to a formula-based estimate.
- */
-export async function getServingSizeG(fdcId: number): Promise<number | null> {
-  try {
-    const url = `${FDC_BASE}/food/${fdcId}?api_key=${process.env.USDA_FDC_API_KEY}`
-    const res = await fetch(url)
-    if (!res.ok) return null
+function extractNutrients(data: FDCFood): Record<string, number> {
+  const result: Record<string, number> = {}
 
-    const data = (await res.json()) as FDCFood
-    const portions = (data.foodPortions ?? []).filter(p => p.gramWeight > 0)
-    if (portions.length === 0) return null
+  for (const [key, nutrientId] of Object.entries(NUTRIENT_ID_MAP)) {
+    // FDC Foundation/SR Legacy: { nutrient: { id }, amount }
+    // FDC Branded: { nutrientId, value }
+    // Energy can appear under ID 1008 (Atwater general) OR 2047 (Atwater specific)
+    const altEnergyId = key === 'energy_kcal' ? 2047 : null
 
-    const nlea = portions.find(p => p.modifier?.toLowerCase().includes('nlea serving'))
-    if (nlea) return nlea.gramWeight
-
-    const weights = portions.map(p => p.gramWeight).sort((a, b) => a - b)
-    return weights[Math.floor(weights.length / 2)]
-  } catch (err) {
-    console.warn(`FDC serving-size fetch error for fdcId ${fdcId}:`, err)
-    return null
+    const nutrient = data.foodNutrients.find((n) =>
+      (n.nutrient?.id === nutrientId) || (n.nutrientId === nutrientId) ||
+      (altEnergyId !== null && ((n.nutrient?.id === altEnergyId) || (n.nutrientId === altEnergyId)))
+    )
+    if (nutrient) {
+      const val = nutrient.amount ?? nutrient.value
+      if (val !== undefined) {
+        // FDC reports EPA/DHA (nutrient IDs 1278/1272) in grams, like other
+        // fatty acids — but our key names (and the rest of the app) treat
+        // omega3_epa_mg/omega3_dha_mg as milligrams. Without this conversion,
+        // logged fish showed EPA/DHA ~1000x too small (e.g. sardines'
+        // 0.473g EPA/100g stored as "0.473mg", rounding away to ~nothing).
+        const isGramsReportedAsMg = key === 'omega3_epa_mg' || key === 'omega3_dha_mg'
+        result[key] = isGramsReportedAsMg ? val * 1000 : val  // per 100g
+      }
+    }
   }
+
+  // Sanity check: energy > 9 kcal/g is physically impossible (pure fat = ~9 kcal/g)
+  // If we see this, the record is likely reporting per-serving not per-100g — discard it
+  if (result.energy_kcal && result.energy_kcal > 900) {
+    console.warn(`FDC fdcId ${data.fdcId} returned suspicious energy ${result.energy_kcal} kcal/100g — discarding`)
+    return {}
+  }
+
+  return result  // per 100g
+}
+
+/**
+ * Pick a real-world "standard serving" gram weight from a food's own FDC
+ * household-measure data (foodPortions), preferring the FDA's "NLEA
+ * serving" -- the reference amount used on the Nutrition Facts label, the
+ * closest thing to a universal "one serving" that exists across food
+ * types. Falls back to the median of whatever portions ARE listed.
+ * Returns null when the record has no portion data at all.
+ */
+function extractServingSizeG(data: FDCFood): number | null {
+  const portions = (data.foodPortions ?? []).filter(p => p.gramWeight > 0)
+  if (portions.length === 0) return null
+
+  const nlea = portions.find(p => p.modifier?.toLowerCase().includes('nlea serving'))
+  if (nlea) return nlea.gramWeight
+
+  const weights = portions.map(p => p.gramWeight).sort((a, b) => a - b)
+  return weights[Math.floor(weights.length / 2)]
+}
+
+/**
+ * Fetch full nutrient data for a food by fdcId.
+ * Returns empty object if the food record is unavailable (404 / API error).
+ */
+export async function getFoodNutrients(fdcId: number): Promise<Record<string, number>> {
+  const data = await fetchFdcFood(fdcId)
+  if (!data) return {}
+  return extractNutrients(data)
+}
+
+/**
+ * Combined nutrients + serving-size fetch, one HTTP round-trip. Used by the
+ * menu planner (via lookupFoodNutrients) so resolving a food's serving size
+ * never doubles the request count on top of the nutrient lookup -- the
+ * planner already resolves every food in a plan concurrently (Promise.all),
+ * so an extra request per food multiplies fast and risks USDA's rate limit,
+ * which surfaced as serving-size snapping silently failing for some foods
+ * in a multi-food plan even though it worked in isolated single-food tests.
+ */
+export async function getFoodDetail(fdcId: number): Promise<{ nutrients: Record<string, number>; servingSizeG: number | null }> {
+  const data = await fetchFdcFood(fdcId)
+  if (!data) return { nutrients: {}, servingSizeG: null }
+  return { nutrients: extractNutrients(data), servingSizeG: extractServingSizeG(data) }
 }
 
 /**
@@ -490,6 +504,7 @@ export async function lookupFoodNutrients(params: {
   nutrients_max: Record<string, number>
   nutrients_mid: Record<string, number>
   source: 'branded' | 'generic'
+  serving_g: number | null
 } | null> {
   const { name: rawName, portion_g_min, portion_g_max, prep_method } = params
   // Rewrite butcher's-ratio shorthand ("90/10 beef") into USDA's own wording
@@ -501,7 +516,7 @@ export async function lookupFoodNutrients(params: {
   // ── Step 0: Known-staple override — bypasses unreliable USDA text search ──
   const overrideFdcId = STAPLE_FOOD_OVERRIDES[normalizedName]
   if (overrideFdcId) {
-    const per100g = await getFoodNutrients(overrideFdcId)
+    const { nutrients: per100g, servingSizeG } = await getFoodDetail(overrideFdcId)
     if (per100g.energy_kcal && hasCompleteMacroProfile(per100g)) {
       const mid = (portion_g_min + portion_g_max) / 2
       console.log(`✓ Staple override match for "${name}": fdcId ${overrideFdcId}`)
@@ -511,6 +526,7 @@ export async function lookupFoodNutrients(params: {
         nutrients_max: applyPrepAdjustments(scaleNutrients(per100g, portion_g_max), prep_method),
         nutrients_mid: applyPrepAdjustments(scaleNutrients(per100g, mid), prep_method),
         source: 'generic',
+        serving_g: servingSizeG,
       }
     }
     console.warn(`Staple override fdcId ${overrideFdcId} for "${name}" failed to return usable data — falling back to search`)
@@ -520,7 +536,7 @@ export async function lookupFoodNutrients(params: {
   if (looksLikeBrandedFood(name)) {
     const brandedCandidates = await searchBrandedFood(name)
     for (const candidate of brandedCandidates) {
-      const per100g = await getFoodNutrients(candidate.fdcId)
+      const { nutrients: per100g, servingSizeG: brandedServingG } = await getFoodDetail(candidate.fdcId)
       if (!per100g.energy_kcal || per100g.energy_kcal === 0) continue
       if (!hasCompleteMacroProfile(per100g)) {
         console.warn(`Incomplete macro profile for branded "${name}" (${candidate.fdcId}) — skipping candidate`)
@@ -534,6 +550,7 @@ export async function lookupFoodNutrients(params: {
         nutrients_max: applyPrepAdjustments(scaleNutrients(per100g, portion_g_max), prep_method),
         nutrients_mid: applyPrepAdjustments(scaleNutrients(per100g, mid), prep_method),
         source: 'branded',
+        serving_g: brandedServingG,
       }
     }
     console.log(`No branded USDA match for "${name}" — trying Open Food Facts`)
@@ -556,6 +573,7 @@ export async function lookupFoodNutrients(params: {
         nutrients_max: applyPrepAdjustments(scaleNutrients(candidate.per100g, portion_g_max), prep_method),
         nutrients_mid: applyPrepAdjustments(scaleNutrients(candidate.per100g, mid), prep_method),
         source: 'branded',
+        serving_g: null,
       }
     }
     console.log(`No Open Food Facts match for "${name}" either — falling back to generic`)
@@ -573,7 +591,7 @@ export async function lookupFoodNutrients(params: {
       console.warn(`Skipping implausible candidate for "${name}": ${candidate.description}`)
       continue
     }
-    const per100g = await getFoodNutrients(candidate.fdcId)
+    const { nutrients: per100g, servingSizeG: genericServingG } = await getFoodDetail(candidate.fdcId)
     // Must have energy_kcal specifically — a record without it is useless
     if (!per100g.energy_kcal || per100g.energy_kcal === 0) continue
     // Must also have all three core macros — a record missing one (e.g. no
@@ -590,6 +608,7 @@ export async function lookupFoodNutrients(params: {
       nutrients_max: applyPrepAdjustments(scaleNutrients(per100g, portion_g_max), prep_method),
       nutrients_mid: applyPrepAdjustments(scaleNutrients(per100g, mid), prep_method),
       source: 'generic',
+      serving_g: genericServingG,
     }
   }
 
