@@ -4,19 +4,15 @@
  * solver doesn't propose things like "600g of jam".
  */
 
-import { lookupFoodNutrients, getServingSizeG } from './nutrition'
+import { lookupFoodNutrients } from './nutrition'
 
-export type PlannerMacros = {
-    energy_kcal: number
-    protein_g: number
-    fat_g: number
-    carbohydrate_g: number
+export type PlannerMacros = Record<string, number> & {
     // A real-world "standard serving" in grams, pulled from USDA's own
-    // household-measure data when available (see getServingSizeG). Used to
-    // round the menu planner's suggested portion to something that reads
-    // like an actual serving instead of a raw solver output. Undefined when
-    // the food came from a source without portion data (branded/Open Food
-    // Facts matches, or a USDA record with none listed).
+    // household-measure data when available. Used to round the menu
+    // planner's suggested portion to something that reads like an actual
+    // serving instead of a raw solver output. Undefined when the food came
+    // from a source without portion data (branded/Open Food Facts matches,
+    // or a USDA record with none listed).
     serving_g?: number
 }
 
@@ -56,18 +52,16 @@ export async function resolveFoodMacrosPer100g(name: string): Promise<PlannerMac
           return null
     }
 
-  // Only USDA-matched foods (source === 'generic') have a real fdcId to
-  // look up a serving size for -- branded/Open Food Facts matches don't
-  // carry FDC portion data, so they fall back to the calorie-density
-  // formula in the planner route instead.
-  const serving_g = result.fdcId ? await getServingSizeG(result.fdcId) ?? undefined : undefined
-
+  // Carry the FULL resolved nutrient profile (not just the 4 macros) so
+  // menu-planner-saved meals retain fiber/vitamins/minerals just like meals
+  // logged via photo/text -- otherwise Nudge's nutrient insights silently
+  // understate micronutrient intake on any day containing a planned meal.
+  // serving_g now comes from the same lookupFoodNutrients call (via
+  // getFoodDetail in nutrition.ts) instead of a separate USDA fetch, so a
+  // multi-food plan no longer doubles its request volume to the FDC API.
   return {
-        energy_kcal: n.energy_kcal,
-        protein_g: n.protein_g,
-        fat_g: n.fat_g,
-        carbohydrate_g: n.carbohydrate_g,
-        serving_g,
+        ...n,
+        serving_g: result.serving_g ?? undefined,
   }
 }
 
